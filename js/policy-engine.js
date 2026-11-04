@@ -1,7 +1,7 @@
 /**
- * BlastRadius Zero — Deterministic Policy Engine
+ * BlastRadius Zero - Deterministic Policy Engine
  * Real AST-style parser for shell / SQL / Terraform / JSON.
- * No LLM calls — pure deterministic analysis.
+ * No LLM calls - pure deterministic analysis.
  * Exposes: window.BlastPolicy.analyze(text) -> { score, violations, affectedResources, findings }
  */
 
@@ -47,7 +47,7 @@
       test(text) {
         const re = /rm\s+.*-rf\s+\/|rm\s+-rf\s+\//gi;
         return matchRule(text, re, this,
-          "Unbounded filesystem deletion — would destroy host filesystem");
+          "Unbounded filesystem deletion - would destroy host filesystem");
       }
     },
     {
@@ -64,7 +64,7 @@
           // skip if already caught by R01-rm-rf (contains " /")
           if (/rm\s+.*-rf\s+\//i.test(m[0])) continue;
           hits.push(hit(this, text, m,
-            `Recursive deletion: \`${m[0].trim().slice(0, 80)}\` — requires explicit allowlist`));
+            `Recursive deletion: \`${m[0].trim().slice(0, 80)}\` - requires explicit allowlist`));
         }
         return hits;
       }
@@ -77,7 +77,7 @@
       test(text) {
         // Matches SQL DROP TABLE with or without IF EXISTS
         const re = /DROP\s+TABLE\s+(IF\s+EXISTS\s+)?["'`\w.]+/gi;
-        return matchRule(text, re, this, "Irreversible DROP TABLE — use expand-contract migration");
+        return matchRule(text, re, this, "Irreversible DROP TABLE - use expand-contract migration");
       }
     },
     {
@@ -87,7 +87,7 @@
       label: "DROP COLUMN",
       test(text) {
         const re = /ALTER\s+TABLE\s+[^;]+\bDROP\s+COLUMN\b[^;]*/gi;
-        return matchRule(text, re, this, "DROP COLUMN is non-reversible — use phased column deprecation");
+        return matchRule(text, re, this, "DROP COLUMN is non-reversible - use phased column deprecation");
       }
     },
     {
@@ -97,7 +97,7 @@
       label: "DROP DATABASE",
       test(text) {
         const re = /DROP\s+DATABASE\s+["'`\w-]+/gi;
-        return matchRule(text, re, this, "DROP DATABASE — catastrophic data loss");
+        return matchRule(text, re, this, "DROP DATABASE - catastrophic data loss");
       }
     },
     {
@@ -107,7 +107,7 @@
       label: "TRUNCATE TABLE",
       test(text) {
         const re = /TRUNCATE\s+TABLE\s+["'`\w.]+/gi;
-        return matchRule(text, re, this, "TRUNCATE TABLE — unbounded row deletion without WHERE clause");
+        return matchRule(text, re, this, "TRUNCATE TABLE - unbounded row deletion without WHERE clause");
       }
     },
     {
@@ -127,7 +127,7 @@
           // simple: the matched snippet itself has no WHERE
           if (!/WHERE/i.test(snippet)) {
             hits.push(hit(this, text, m,
-              `DELETE without WHERE clause — would remove all rows: \`${snippet.trim().slice(0, 70)}\``));
+              `DELETE without WHERE clause - would remove all rows: \`${snippet.trim().slice(0, 70)}\``));
           }
         }
         return hits;
@@ -140,7 +140,7 @@
       label: "Redis FLUSHALL",
       test(text) {
         const re = /\bFLUSHALL\b|\bFLUSHDB\b/gi;
-        return matchRule(text, re, this, "Redis FLUSHALL/FLUSHDB — wipes entire cache, causes thundering-herd stampede");
+        return matchRule(text, re, this, "Redis FLUSHALL/FLUSHDB - wipes entire cache, causes thundering-herd stampede");
       }
     },
     {
@@ -150,7 +150,7 @@
       label: "kubectl delete namespace",
       test(text) {
         const re = /kubectl\s+delete\s+(ns|namespace)\b[^\n]*/gi;
-        return matchRule(text, re, this, "kubectl delete namespace — destroys all workloads in namespace");
+        return matchRule(text, re, this, "kubectl delete namespace - destroys all workloads in namespace");
       }
     },
     {
@@ -160,7 +160,7 @@
       label: "kubectl delete --all",
       test(text) {
         const re = /kubectl\s+delete[^\n]*--all\b[^\n]*/gi;
-        return matchRule(text, re, this, "kubectl delete --all — unbounded resource deletion");
+        return matchRule(text, re, this, "kubectl delete --all - unbounded resource deletion");
       }
     },
     {
@@ -170,7 +170,7 @@
       label: "terraform destroy",
       test(text) {
         const re = /terraform\s+destroy\b[^\n]*/gi;
-        return matchRule(text, re, this, "terraform destroy — deletes all managed infrastructure");
+        return matchRule(text, re, this, "terraform destroy - deletes all managed infrastructure");
       }
     },
 
@@ -189,11 +189,11 @@
         let m;
         // Prefer precise match first
         const seen = new Set();
-        while ((m = re.exec(text))) { hits.push(hit(this, text, m, "IAM wildcard action `iam:*` — grants full IAM control")); seen.add(m.index); }
+        while ((m = re.exec(text))) { hits.push(hit(this, text, m, "IAM wildcard action `iam:*` - grants full IAM control")); seen.add(m.index); }
         // Bare iam:* in aws cli or terraform
         const bareRe = /aws\s+iam\s+attach[^\n]*AdministratorAccess|policy_arn\s*=\s*["'][^"']*AdministratorAccess["']/gi;
         while ((m = bareRe.exec(text))) {
-          if (!seen.has(m.index)) hits.push(hit(this, text, m, "AdministratorAccess policy attachment — full account takeover"));
+          if (!seen.has(m.index)) hits.push(hit(this, text, m, "AdministratorAccess policy attachment - full account takeover"));
         }
         // Also bare iam:* in non-already-matched context
         const bare2 = /(^|[^a-z_])iam:\*/gim;
@@ -217,7 +217,7 @@
       label: "AdministratorAccess",
       test(text) {
         const re = /AdministratorAccess/gi;
-        return matchRule(text, re, this, "AdministratorAccess grant — violates least-privilege principle");
+        return matchRule(text, re, this, "AdministratorAccess grant - violates least-privilege principle");
       }
     },
     {
@@ -228,7 +228,7 @@
       test(text) {
         // resource = "*"  or "Resource": "*"
         const re = /resource\s*=\s*["']\*["']|"Resource"\s*:\s*["']\*["']/gi;
-        return matchRule(text, re, this, 'IAM Resource "*" — policy applies to every resource in the account');
+        return matchRule(text, re, this, 'IAM Resource "*" - policy applies to every resource in the account');
       }
     },
     {
@@ -239,8 +239,8 @@
       test(text) {
         const re = /sts:AssumeRole[^"']*["'][^"']*\*[^"']*["']/gi;
         const re2 = /Action[^\n]*sts:\*/gi;
-        let hits = matchRule(text, re, this, "sts:AssumeRole with wildcard — privilege escalation vector");
-        hits = hits.concat(matchRule(text, re2, { ...this, severity: 8 }, "sts:* wildcard — overly broad STS permission"));
+        let hits = matchRule(text, re, this, "sts:AssumeRole with wildcard - privilege escalation vector");
+        hits = hits.concat(matchRule(text, re2, { ...this, severity: 8 }, "sts:* wildcard - overly broad STS permission"));
         return hits;
       }
     },
@@ -256,7 +256,7 @@
         // vultr gpu / gpu node patterns
         const patterns = [
           { re: /replicas\s*=\s*(\d+)/gi, threshold: 5, msg: n => `Replica count ${n} exceeds cost-safe limit` },
-          { re: /count\s*=\s*(\d+)[^\n]*gpu/gi, threshold: 4, msg: n => `GPU count ${n} — estimated cost breach` },
+          { re: /count\s*=\s*(\d+)[^\n]*gpu/gi, threshold: 4, msg: n => `GPU count ${n} - estimated cost breach` },
           { re: /gpus?\s*[:=]\s*(\d+)/gi, threshold: 4, msg: n => `GPU allocation ${n} exceeds budget` },
         ];
         for (const p of patterns) {
@@ -270,7 +270,7 @@
         const gpuRe = /vultr\s+.*gpu|gpu.*cluster.*spinup|spinup.*gpu/gi;
         let m;
         while ((m = gpuRe.exec(text))) {
-          hits.push(hit(this, text, m, "GPU cluster spinup detected — verify cost cap before approval"));
+          hits.push(hit(this, text, m, "GPU cluster spinup detected - verify cost cap before approval"));
         }
         // $ cost annotation
         const costRe = /\$\s*[\d,]+\s*\/\s*hr/gi;
@@ -282,7 +282,7 @@
         const tfCount = /resource\s+"[^"]+"\s+"[^"]+"\s*\{[^}]*count\s*=\s*(\d+)/gi;
         while ((m = tfCount.exec(text))) {
           const n = parseInt(m[1], 10);
-          if (n > 10) hits.push(hit(this, text, m, `Terraform count = ${n} — potential cost explosion`));
+          if (n > 10) hits.push(hit(this, text, m, `Terraform count = ${n} - potential cost explosion`));
         }
         return hits;
       }
@@ -298,7 +298,7 @@
         let m;
         while ((m = re.exec(text))) {
           const n = parseInt(m[1] || m[2] || m[3], 10);
-          if (n > 20) hits.push(hit(this, text, m, `Autoscale maxReplicas=${n} — unbounded scaling risk`));
+          if (n > 20) hits.push(hit(this, text, m, `Autoscale maxReplicas=${n} - unbounded scaling risk`));
         }
         return hits;
       }
@@ -334,13 +334,13 @@
             hits.push(hit(this, text, m,
               `Potential secret exfiltration via curl: \`${line.trim().slice(0, 90)}\``));
           } else if (hasExternal && /exfil|attacker|ngrok|oast|burpcollaborator|webhook/i.test(text)) {
-            hits.push(hit(this, text, m, "curl to external host in untrusted context — possible exfiltration"));
+            hits.push(hit(this, text, m, "curl to external host in untrusted context - possible exfiltration"));
           }
         }
         // Generic: markdown image exfil pattern ![...](https://attacker...${SECRET})
         const mdExfil = /!\[[^\]]*\]\([^)]*\$\{?[A-Z_]+[^)]*\)/gi;
         while ((m = mdExfil.exec(text))) {
-          hits.push(hit(this, text, m, "Markdown image with secret interpolation — covert exfiltration channel"));
+          hits.push(hit(this, text, m, "Markdown image with secret interpolation - covert exfiltration channel"));
         }
         return hits;
       }
@@ -352,7 +352,7 @@
       label: "Environment dump",
       test(text) {
         const re = /\benv\b[^\n]*\|\s*base64|\bprintenv\b|\bexport\b[^\n]*\|\s*curl|\bcat\s+\/proc\/self\/environ/gi;
-        return matchRule(text, re, this, "Environment variable dump — would expose secrets");
+        return matchRule(text, re, this, "Environment variable dump - would expose secrets");
       }
     },
     {

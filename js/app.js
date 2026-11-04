@@ -1,5 +1,5 @@
 /**
- * BlastRadius Zero — Interactive Controller
+ * BlastRadius Zero - Interactive Controller
  * Scenario switching · live AST analysis · SVG topology · dry-run chart · audit exports
  */
 (function () {
@@ -55,7 +55,7 @@
       <div class="composer-icon">✦</div>
       <div>
         <h4>Custom Incident Composer</h4>
-        <p>Define your own incident — edit telemetry, proposal &amp; topology, then test the gatekeeper live.</p>
+        <p>Define your own incident - edit telemetry, proposal &amp; topology, then test the gatekeeper live.</p>
       </div>
     `;
     composer.addEventListener("click", () => selectScenario("custom"));
@@ -222,29 +222,29 @@
       numEl.style.color = score >= 70 ? "#EF4444" : score >= 35 ? "#F59E0B" : score < 12 ? "#10B981" : "#EAB308";
     }
     if (titleEl) {
-      if (analysis.clean) titleEl.textContent = "✓ No violations — proposal converges to safe state";
-      else if (score >= 70) titleEl.textContent = "⛔ Blast radius critical — gate BLOCKED";
-      else if (score >= 35) titleEl.textContent = "⚠ Blast radius elevated — gate BLOCKED";
-      else titleEl.textContent = "⚠ Minor risks — review required";
+      if (analysis.clean) titleEl.textContent = "✓ No violations - proposal converges to safe state";
+      else if (score >= 70) titleEl.textContent = "⛔ Blast radius critical - gate BLOCKED";
+      else if (score >= 35) titleEl.textContent = "⚠ Blast radius elevated - gate BLOCKED";
+      else titleEl.textContent = "⚠ Minor risks - review required";
     }
     if (descEl) {
       if (analysis.clean) descEl.textContent = "All 4 deterministic policies pass. Safe to proceed to shadow dry-run.";
-      else descEl.textContent = `${analysis.findings.length} finding(s) across ${analysis.violations.length} polic${analysis.violations.length === 1 ? "y" : "ies"} — affected resources highlighted below.`;
+      else descEl.textContent = `${analysis.findings.length} finding(s) across ${analysis.violations.length} polic${analysis.violations.length === 1 ? "y" : "ies"} - affected resources highlighted below.`;
     }
     if (pill) {
       pill.className = "verdict-pill";
       if (analysis.clean) {
         pill.classList.add("pass");
-        pill.textContent = "✓ PASS — Zero blast radius";
+        pill.textContent = "✓ PASS - Zero blast radius";
       } else if (score >= 70) {
         pill.classList.add("block");
-        pill.textContent = `⛔ BLOCKED — Score ${score}/100 · ${analysis.violations.join(", ")}`;
+        pill.textContent = `⛔ BLOCKED - Score ${score}/100 · ${analysis.violations.join(", ")}`;
       } else if (score >= 35) {
         pill.classList.add("block");
-        pill.textContent = `⛔ BLOCKED — Score ${score}/100`;
+        pill.textContent = `⛔ BLOCKED - Score ${score}/100`;
       } else {
         pill.classList.add("warn");
-        pill.textContent = `⚠ WARN — Score ${score}/100 · needs review`;
+        pill.textContent = `⚠ WARN - Score ${score}/100 · needs review`;
       }
     }
 
@@ -270,7 +270,7 @@
     const fl = $("#findingsList");
     if (fl) {
       if (analysis.findings.length === 0) {
-        fl.innerHTML = `<div style="padding:10px 12px;background:var(--bg2);border:1px solid var(--safe-border);border-radius:10px;color:var(--safe2);font-size:11.5px">✓ No findings — all deterministic checks pass. Proceed to dry-run.</div>`;
+        fl.innerHTML = `<div style="padding:10px 12px;background:var(--bg2);border:1px solid var(--safe-border);border-radius:10px;color:var(--safe2);font-size:11.5px">✓ No findings - all deterministic checks pass. Proceed to dry-run.</div>`;
       } else {
         fl.innerHTML = analysis.findings.map(f => {
           const sev = f.severity >= 8 ? "block" : "warn";
@@ -280,7 +280,7 @@
               <div class="finding-icon" style="background:${sev === "block" ? "var(--danger-bg)" : "var(--amber-bg)"};border:1px solid ${sev === "block" ? "var(--danger-border)" : "var(--amber-border)"};color:${sev === "block" ? "var(--danger2)" : "var(--amber2)"}">${icon}</div>
               <div class="finding-body">
                 <h4>${escapeHtml(f.message)}</h4>
-                <p><b>${f.rule}</b> · ${f.policy} · line ${f.line} — ${escapeHtml(f.remediation)}</p>
+                <p><b>${f.rule}</b> · ${f.policy} · line ${f.line} - ${escapeHtml(f.remediation)}</p>
                 <div class="finding-meta"><b>Snippet:</b> <code>${escapeHtml(f.snippet)}</code></div>
               </div>
             </div>
@@ -355,7 +355,7 @@
     svg.querySelectorAll(".topo-node").forEach(g => {
       g.addEventListener("click", () => {
         const id = g.getAttribute("data-id");
-        toast(`${topo.nodes.find(n => n.id === id)?.label || id} — ${affected.has(id) ? "affected by proposal" : "not affected"}`);
+        toast(`${topo.nodes.find(n => n.id === id)?.label || id} - ${affected.has(id) ? "affected by proposal" : "not affected"}`);
       });
     });
   }
@@ -375,7 +375,7 @@
           blocked.textContent = ed.value;
         }
       } else {
-        blocked.textContent = "— No blocked actions (proposal is clean) —";
+        blocked.textContent = " -  No blocked actions (proposal is clean)  - ";
       }
     }
     if (safe) safe.textContent = currentScenario.safeRemediation;
@@ -581,7 +581,7 @@
     analyzeAndRender();
     renderRightDiff();
     startDryRunAnimation();
-    toast("Injected — gatekeeper re-analyzed live");
+    toast("Injected - gatekeeper re-analyzed live");
   }
 
   function applySafeFix() {
@@ -591,7 +591,7 @@
     analyzeAndRender();
     renderRightDiff();
     startDryRunAnimation();
-    toast("Applied zero-blast-radius remediation — score should drop to safe", "success");
+    toast("Applied zero-blast-radius remediation - score should drop to safe", "success");
   }
 
   // ── Audit / SARIF exports ─────────────────────────────────────────
@@ -599,7 +599,7 @@
     const now = new Date().toISOString();
     const editorText = $("#proposalEditor") ? $("#proposalEditor").value : "";
     return {
-      bundle: "BlastRadius Zero — Signed Audit",
+      bundle: "BlastRadius Zero - Signed Audit",
       version: "1.0.0",
       generatedAt: now,
       scenario: currentScenario ? { id: currentScenario.id, title: currentScenario.title, severity: currentScenario.severity } : null,
@@ -621,7 +621,7 @@
       })) : [],
       policyStates: analysis ? analysis.policyStates : [],
       proposal: { raw: editorText, blockedPreview: $("#diffBlocked") ? $("#diffBlocked").textContent : "", safeRemediation: currentScenario ? currentScenario.safeRemediation : "" },
-      signature: { algo: "HMAC-SHA256 (simulated)", signer: "blastradius-zero-gatekeeper", note: "Deterministic audit — no LLM; reproducible from proposal text + policy engine version." },
+      signature: { algo: "HMAC-SHA256 (simulated)", signer: "blastradius-zero-gatekeeper", note: "Deterministic audit - no LLM; reproducible from proposal text + policy engine version." },
     };
   }
 
@@ -631,7 +631,7 @@
       id: r.id,
       name: r.label,
       shortDescription: { text: r.label },
-      fullDescription: { text: `${r.policy} — ${r.label}` },
+      fullDescription: { text: `${r.policy} - ${r.label}` },
       defaultConfiguration: { level: r.severity >= 9 ? "error" : r.severity >= 6 ? "warning" : "note" },
       properties: { policy: r.policy, severity: r.severity },
     }));
@@ -670,12 +670,12 @@
     const payload = buildAuditPayload();
     const findingsMd = payload.findings.length
       ? payload.findings.map(f => `| \`${f.rule}\` | ${f.policy} | ${f.severity} | ${f.message} | L${f.line} | ${f.remediation} |`).join("\n")
-      : "_No findings — all policies pass._";
+      : "_No findings - all policies pass._";
 
-    return `# BlastRadius Zero — Audit Report
+    return `# BlastRadius Zero - Audit Report
 
 **Generated:** ${payload.generatedAt}
-**Scenario:** ${payload.scenario.title} (${payload.scenario.id}) — ${payload.scenario.severity}
+**Scenario:** ${payload.scenario.title} (${payload.scenario.id}) - ${payload.scenario.severity}
 **Gate:** **${payload.gate.status}** · Blast Score **${payload.gate.blastScore}/100**
 **Violations:** ${payload.gate.violations.length ? payload.gate.violations.join(", ") : "none"}
 **Affected Resources:** ${payload.gate.affectedResources.length ? payload.gate.affectedResources.join(", ") : "none"}
@@ -684,7 +684,7 @@
 
 | Policy | Status | Findings |
 |--------|--------|----------|
-${payload.policyStates.map(p => `| ${p.id} — ${p.name} | ${p.status.toUpperCase()} | ${p.count} |`).join("\n")}
+${payload.policyStates.map(p => `| ${p.id} - ${p.name} | ${p.status.toUpperCase()} | ${p.count} |`).join("\n")}
 
 ## Findings
 
@@ -823,7 +823,7 @@ ${payload.proposal.safeRemediation}
         await navigator.clipboard.writeText(safe.textContent);
         toast("Copied safe remediation", "success");
       } catch {
-        toast("Copy failed — select and copy manually");
+        toast("Copy failed - select and copy manually");
       }
     });
 
@@ -882,7 +882,7 @@ ${payload.proposal.safeRemediation}
       setTimeout(() => {
         downloadFile(`blastradius-${currentId || "unknown"}-${Date.now()}.sarif.json`, JSON.stringify(sarif, null, 2), "application/json");
       }, 350);
-      openModal("Audit Bundle — JSON Preview (also downloading SARIF)", JSON.stringify(payload, null, 2));
+      openModal("Audit Bundle - JSON Preview (also downloading SARIF)", JSON.stringify(payload, null, 2));
     });
 
     const btnPreview = $("#btnPreviewAudit");

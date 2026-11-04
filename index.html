@@ -4,8 +4,8 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <meta name="color-scheme" content="dark">
-<title>BlastRadius Zero — Autonomous Multi-Agent Cloud Incident &amp; Policy Gatekeeper</title>
-<meta name="description" content="Deterministic policy gatekeeper for autonomous cloud agents — AST analysis, blast-radius scoring, and zero-downtime remediation synthesis.">
+<title>BlastRadius Zero - Autonomous Multi-Agent Cloud Incident &amp; Policy Gatekeeper</title>
+<meta name="description" content="Deterministic policy gatekeeper for autonomous cloud agents - AST analysis, blast-radius scoring, and zero-downtime remediation synthesis.">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link href="https://fonts.googleapis.com/css2?family=Inter:wght@500;600;700;800&family=JetBrains+Mono:wght@400;600;700&display=swap" rel="stylesheet">
 <link rel="stylesheet" href="styles.css">
@@ -18,17 +18,17 @@
     <div class="logo-mark">◈</div>
     <div class="header-title">
       <h1><span>BLASTRADIUS</span> <em>ZERO</em> <span class="badge-live">● LIVE GATEKEEPER</span></h1>
-      <p>Autonomous Multi-Agent Cloud Incident &amp; Policy Gatekeeper — Vultr Agent Rush · Next Byte V5 · Remote Control AI</p>
+      <p>Autonomous Multi-Agent Cloud Incident &amp; Policy Gatekeeper - Vultr Agent Rush · Next Byte V5 · Remote Control AI</p>
     </div>
   </div>
   <div class="header-right">
     <div class="hdr-stat">
       <span class="hdr-stat-label">Gate Status</span>
-      <span class="hdr-stat-value" id="hdrGateStatus">—</span>
+      <span class="hdr-stat-value" id="hdrGateStatus"> - </span>
     </div>
     <div class="hdr-stat">
       <span class="hdr-stat-label">Blast Score</span>
-      <span class="hdr-stat-value" id="hdrBlastScore">—</span>
+      <span class="hdr-stat-value" id="hdrBlastScore"> - </span>
     </div>
     <button class="btn-ghost" id="btnDryRun">▶ Run Dry-Run</button>
     <button class="btn-primary" id="btnExport">⤓ Export Audit Bundle</button>
@@ -38,7 +38,7 @@
 <!-- ═══════════════════ SCENARIO SWITCHER ═══════════════════ -->
 <div class="scenario-bar">
   <div class="scenario-bar-head">
-    <h2>▸ Scenario Switcher <b>— 4 Incidents + Custom Composer</b></h2>
+    <h2>▸ Scenario Switcher <b> -  4 Incidents + Custom Composer</b></h2>
     <div class="composer-actions">
       <button class="btn-ghost btn-sm" id="btnComposer">✦ Custom Incident Composer</button>
     </div>
@@ -74,15 +74,15 @@
       <!-- Editable proposal -->
       <div class="editor-wrap">
         <div class="editor-head">
-          <span>✎ Proposed Remediation Plan — Editable (gatekeeper reacts live)</span>
+          <span>✎ Proposed Remediation Plan - Editable (gatekeeper reacts live)</span>
           <div class="editor-actions">
             <button class="btn-ghost btn-sm" id="btnResetProposal">↺ Reset</button>
             <button class="btn-ghost btn-sm" id="btnCopyProposal">⧉ Copy</button>
           </div>
         </div>
-        <textarea class="proposal-editor" id="proposalEditor" spellcheck="false" placeholder="Edit the agent-proposed commands here — the gatekeeper analyzes on every keystroke."></textarea>
+        <textarea class="proposal-editor" id="proposalEditor" spellcheck="false" placeholder="Edit the agent-proposed commands here - the gatekeeper analyzes on every keystroke."></textarea>
         <div class="editor-hint">
-          <b>Try injecting:</b> destructive commands to test the gatekeeper live. Edits are analyzed deterministically — no network calls.
+          <b>Try injecting:</b> destructive commands to test the gatekeeper live. Edits are analyzed deterministically - no network calls.
           <div class="inject-row" id="injectRow"></div>
         </div>
       </div>
@@ -111,7 +111,7 @@
             <circle class="score-ring-fg" id="scoreRingFg" cx="42" cy="42" r="32" stroke-dasharray="201" stroke-dashoffset="201"></circle>
           </svg>
           <div class="score-ring-center">
-            <div class="score-num" id="scoreNum">—</div>
+            <div class="score-num" id="scoreNum"> - </div>
             <div class="score-label">Blast Score</div>
           </div>
         </div>
@@ -172,7 +172,7 @@
       <!-- Dry-run chart -->
       <div class="dryrun-chart">
         <div class="dryrun-chart-head">
-          <h4>◉ Shadow Dry-Run — Latency &amp; Error-Rate Recovery</h4>
+          <h4>◉ Shadow Dry-Run - Latency &amp; Error-Rate Recovery</h4>
           <button class="btn-ghost btn-sm" id="btnReplayDryRun">↺ Replay</button>
         </div>
         <div class="chart-wrap">
