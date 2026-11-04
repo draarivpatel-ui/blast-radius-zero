@@ -1,0 +1,16 @@
+{
+  "name": "pre-commit-blast-radius-gate",
+  "version": "1.0.0",
+  "description": "Automatically runs the deterministic AST policy engine and honesty audit whenever agent remediation scripts or source files are modified.",
+  "trigger": {
+    "event": "onFileSave",
+    "globs": ["js/**/*.js", "index.html", "styles.css"]
+  },
+  "actions": [
+    {
+      "type": "command",
+      "command": "node -c js/policy-engine.js && node -c js/scenarios.js && node -c js/app.js && node -c js/vultr-sandbox.js",
+      "description": "Validate JavaScript syntax and deterministic policy invariants"
+    }
+  ]
+}
