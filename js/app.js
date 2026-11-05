@@ -599,7 +599,7 @@
     const now = new Date().toISOString();
     const editorText = $("#proposalEditor") ? $("#proposalEditor").value : "";
     return {
-      bundle: "BlastRadius Zero - Signed Audit",
+      bundle: "BlastRadius Zero - Unsigned Diagnostic Audit",
       version: "1.0.0",
       generatedAt: now,
       scenario: currentScenario ? { id: currentScenario.id, title: currentScenario.title, severity: currentScenario.severity } : null,
@@ -621,7 +621,7 @@
       })) : [],
       policyStates: analysis ? analysis.policyStates : [],
       proposal: { raw: editorText, blockedPreview: $("#diffBlocked") ? $("#diffBlocked").textContent : "", safeRemediation: currentScenario ? currentScenario.safeRemediation : "" },
-      signature: { algo: "HMAC-SHA256 (simulated)", signer: "blastradius-zero-gatekeeper", note: "Deterministic audit - no LLM; reproducible from proposal text + policy engine version." },
+      signature: { algo: "none", signer: "none", note: "Unsigned diagnostic export. Local SHA-256 receipts are separate and are not signatures." },
     };
   }
 

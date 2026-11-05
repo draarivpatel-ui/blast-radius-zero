@@ -1,6 +1,6 @@
 /**
  * BlastRadius Zero - Deterministic Policy Engine
- * Real AST-style parser for shell / SQL / Terraform / JSON.
+ * Heuristic text scanner for shell / SQL / Terraform / JSON.
  * No LLM calls - pure deterministic analysis.
  * Exposes: window.BlastPolicy.analyze(text) -> { score, violations, affectedResources, findings }
  */
@@ -437,7 +437,7 @@
 
   // ── Blast radius scoring ───────────────────────────────────────────
   function scoreFromFindings(findings) {
-    if (findings.length === 0) return 4 + Math.floor(Math.random() * 6); // 4-9 when clean
+    if (findings.length === 0) return 0;
     // Weighted by severity
     let raw = 0;
     for (const f of findings) raw += f.severity * 3.2;
@@ -493,7 +493,13 @@
       try {
         const hits = rule.test(input);
         if (hits && hits.length) findings.push(...hits);
-      } catch (_) { /* rule fault tolerance */ }
+      } catch (_) {
+        findings.push({
+          rule: "ENGINE-ERROR", policy: rule.policy, severity: 10,
+          label: "Analysis failed", message: "Rule evaluation failed; approval denied",
+          snippet: "", line: 0, remediation: "Repair the scanner before approving this plan",
+        });
+      }
     }
     // Deduplicate by (rule + line)
     const seen = new Set();

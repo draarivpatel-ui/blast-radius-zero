@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <meta name="color-scheme" content="dark">
 <title>BlastRadius Zero - Autonomous Multi-Agent Cloud Incident &amp; Policy Gatekeeper</title>
-<meta name="description" content="Deterministic policy gatekeeper for autonomous cloud agents - AST analysis, blast-radius scoring, and zero-downtime remediation synthesis.">
+<meta name="description" content="Local agent policy studio with heuristic text diagnostics, a default-deny structured action gate, deterministic scoring, and simulated cloud incident plans.">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link href="https://fonts.googleapis.com/css2?family=Inter:wght@500;600;700;800&family=JetBrains+Mono:wght@400;600;700&display=swap" rel="stylesheet">
 <link rel="stylesheet" href="styles.css">
@@ -98,7 +98,7 @@
   <!-- ── CENTER: Blast-Radius Simulator ── -->
   <section class="panel" id="panelCenter">
     <div class="panel-header">
-      <h2><span class="panel-num" style="background:#F59E0B">2</span> Deterministic AST &amp; Blast-Radius Simulator</h2>
+      <h2><span class="panel-num" style="background:#F59E0B">2</span> Policy Diagnostics &amp; Blast-Radius Simulator</h2>
       <span class="panel-subtitle">Deterministic · No LLM</span>
     </div>
     <div class="panel-body">
@@ -188,7 +188,7 @@
 
       <!-- Exports -->
       <div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:10px">
-        <button class="btn-primary btn-sm" id="btnExportJson">⤓ Signed Audit (JSON)</button>
+        <button class="btn-primary btn-sm" id="btnExportJson">⤓ Diagnostic Audit (JSON)</button>
         <button class="btn-primary btn-sm" id="btnExportMd">⤓ Audit Report (Markdown)</button>
         <button class="btn-ghost btn-sm" id="btnExportSarif">⤓ SARIF Bundle</button>
         <button class="btn-ghost btn-sm" id="btnPreviewAudit">👁 Preview</button>
@@ -215,6 +215,14 @@
   </div>
 </div>
 
+<details style="margin:16px;padding:16px;border:1px solid var(--border);border-radius:8px">
+  <summary>Structured Developer Agent Boundary</summary>
+  <p>Validate a typed action before any executor receives it. Unknown actions and all network egress are denied. This demo does not execute commands.</p>
+  <textarea id="manifest-input" aria-label="Structured action manifest" style="width:100%;min-height:100px">{"version":1,"kind":"test","parameters":{"argv":["python","-m","pytest","-q"],"cwd":"/workspace"}}</textarea>
+  <button id="manifest-check" class="btn-amber btn-sm">Validate Structured Manifest</button>
+  <pre id="manifest-result" aria-live="polite"></pre>
+</details>
+<script src="js/manifest-gate.js"></script>
 <script src="js/policy-engine.js"></script>
 <script src="js/scenarios.js"></script>
 <script src="js/app.js"></script>

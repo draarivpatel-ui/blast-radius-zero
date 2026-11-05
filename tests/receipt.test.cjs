@@ -1,0 +1,22 @@
+"use strict";
+const test = require("node:test");
+const assert = require("node:assert/strict");
+const fs = require("node:fs");
+const path = require("node:path");
+const vm = require("node:vm");
+const context = {window: {}};
+vm.createContext(context);
+vm.runInContext(fs.readFileSync(path.join(__dirname, "../js/policy-engine.js"), "utf8"), context);
+globalThis.BlastPolicy = context.window.BlastPolicy;
+const receipts = require("../js/vultr-sandbox.js");
+test("receipt uses real policy engine, a real digest and no fictional execution", async () => {
+  const first = await receipts.createReceipt("DROP TABLE jobs;");
+  const second = await receipts.createReceipt("DROP TABLE jobs;");
+  assert.equal(first.text_scan_clean, false);
+  assert.equal(first.receipt_sha256, second.receipt_sha256);
+  assert.match(first.receipt_sha256, /^[0-9a-f]{64}$/);
+  assert.equal(first.execution_authorized, false);
+  assert.equal(first.execution, "not_performed");
+  assert.equal(first.container_isolation, "not_demonstrated");
+  assert.ok(first.elapsed_ms >= 0);
+});
