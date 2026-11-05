@@ -21,7 +21,7 @@ def lambda_handler(event, context=None):
             text = parameters[0]["value"]
             if len(text) > 100000: raise ValueError("Manifest too large")
             manifest = json.loads(text, parse_constant=lambda _: None)
-        except (ValueError, TypeError):
+        except (ValueError, TypeError, RecursionError):
             manifest = None
     else:
         manifest = None

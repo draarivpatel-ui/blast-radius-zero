@@ -445,7 +445,8 @@
     const policyCount = new Set(findings.map(f => f.policy)).size;
     raw += (policyCount - 1) * 6;
     // Clamp
-    return Math.min(100, Math.max(12, Math.round(raw)));
+    const floor = findings.some(f => f.severity >= 8) ? 35 : 12;
+    return Math.min(100, Math.max(floor, Math.round(raw)));
   }
 
   function affectedFromFindings(findings) {

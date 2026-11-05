@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import math
 import posixpath
 from dataclasses import asdict, dataclass
 
@@ -37,7 +38,8 @@ class Decision:
 
 
 def _integer(value: object, low: int, high: int) -> bool:
-    return type(value) is int and low <= value <= high
+    # JSON numbers with an integral value have the same semantics in JS/Python.
+    return type(value) in (int, float) and low <= value <= high and math.isfinite(value) and value == math.floor(value)
 
 
 def _path(value: object, root: str, *, include_root: bool = True) -> bool:
@@ -55,13 +57,13 @@ def decide(manifest: object) -> Decision:
     reasons: list[str] = []
     try:
         manifest_hash = digest(manifest)
-    except (TypeError, ValueError, OverflowError):
+    except (TypeError, ValueError, OverflowError, RecursionError):
         manifest_hash = None
         reasons.append("SCHEMA")
     policy_hash = digest(POLICY)
     if not isinstance(manifest, dict) or set(manifest) != {"version", "kind", "parameters"}:
         return Decision(False, ("SCHEMA",), manifest_hash, policy_hash)
-    if type(manifest["version"]) is not int or manifest["version"] != 1:
+    if not _integer(manifest["version"], 1, 1):
         reasons.append("SCHEMA")
     kind, params = manifest["kind"], manifest["parameters"]
     if not isinstance(kind, str) or not isinstance(params, dict):
