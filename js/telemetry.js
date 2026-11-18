@@ -195,13 +195,143 @@
     return hashString(material);
   }
 
+  /*
+   * One verdict for every surface (header, console, audit, SARIF).
+   * ALLOW: no finding. APPROVAL REQUIRED: findings exist but every one is
+   * below blocking severity and the score stays under 35. BLOCKED: anything
+   * else, including a missing analysis, so the gate fails closed.
+   */
+  function verdict(analysis) {
+    if (!analysis || typeof analysis.score !== "number") {
+      return { key: "block", label: "BLOCKED", status: "BLOCKED" };
+    }
+    if (analysis.clean) return { key: "allow", label: "ALLOW", status: "ALLOW" };
+    var blocking = (analysis.findings || []).some(function (f) { return f.severity >= 8; });
+    if (!blocking && analysis.score < 35) {
+      return { key: "approval", label: "APPROVAL REQUIRED", status: "APPROVAL_REQUIRED" };
+    }
+    return { key: "block", label: "BLOCKED", status: "BLOCKED" };
+  }
+
+  /* The finding that decided the verdict: highest severity, then earliest line. */
+  function primaryFinding(analysis) {
+    var list = (analysis && analysis.findings) || [];
+    var best = null;
+    for (var i = 0; i < list.length; i++) {
+      var f = list[i];
+      if (!best || f.severity > best.severity ||
+          (f.severity === best.severity && f.line < best.line)) best = f;
+    }
+    return best;
+  }
+
+  /* Line number -> highest severity seen on that line. */
+  function flaggedLines(analysis) {
+    var out = {};
+    var list = (analysis && analysis.findings) || [];
+    for (var i = 0; i < list.length; i++) {
+      var f = list[i];
+      if (!(f.line > 0)) continue;
+      out[f.line] = Math.max(out[f.line] || 0, f.severity);
+    }
+    return out;
+  }
+
+  /*
+   * Line diff by longest common subsequence. Returns ordered operations:
+   * { op: "same" | "del" | "add", text, a, b } with 1-based line numbers.
+   * Inputs over 400 lines fall back to a full delete then add.
+   */
+  function lineDiff(before, after) {
+    var a = String(before == null ? "" : before).split("\n");
+    var b = String(after == null ? "" : after).split("\n");
+    var ops = [];
+    var i, j;
+    if (a.length > 400 || b.length > 400) {
+      for (i = 0; i < a.length; i++) ops.push({ op: "del", text: a[i], a: i + 1, b: null });
+      for (j = 0; j < b.length; j++) ops.push({ op: "add", text: b[j], a: null, b: j + 1 });
+      return ops;
+    }
+    var n = a.length, m = b.length;
+    var table = [];
+    for (i = 0; i <= n; i++) {
+      table.push(new Array(m + 1).fill(0));
+    }
+    for (i = n - 1; i >= 0; i--) {
+      for (j = m - 1; j >= 0; j--) {
+        table[i][j] = a[i] === b[j] ? table[i + 1][j + 1] + 1 : Math.max(table[i + 1][j], table[i][j + 1]);
+      }
+    }
+    i = 0; j = 0;
+    while (i < n && j < m) {
+      if (a[i] === b[j]) { ops.push({ op: "same", text: a[i], a: i + 1, b: j + 1 }); i++; j++; }
+      else if (table[i + 1][j] >= table[i][j + 1]) { ops.push({ op: "del", text: a[i], a: i + 1, b: null }); i++; }
+      else { ops.push({ op: "add", text: b[j], a: null, b: j + 1 }); j++; }
+    }
+    while (i < n) { ops.push({ op: "del", text: a[i], a: i + 1, b: null }); i++; }
+    while (j < m) { ops.push({ op: "add", text: b[j], a: null, b: j + 1 }); j++; }
+    return ops;
+  }
+
+  /*
+   * Before/after containment over resource ids. "contained" are resources
+   * the proposed plan reaches and the safe plan does not; "residual" are
+   * resources the safe plan still reaches.
+   */
+  function containment(beforeAnalysis, afterAnalysis) {
+    var before = (beforeAnalysis && beforeAnalysis.affected) || [];
+    var after = (afterAnalysis && afterAnalysis.affected) || [];
+    var afterSet = {};
+    for (var i = 0; i < after.length; i++) afterSet[after[i]] = true;
+    var contained = before.filter(function (id) { return !afterSet[id]; });
+    return {
+      before: before.slice(),
+      after: after.slice(),
+      contained: contained,
+      residual: after.slice(),
+      scoreBefore: beforeAnalysis ? beforeAnalysis.score : 0,
+      scoreAfter: afterAnalysis ? afterAnalysis.score : 0,
+      verdictBefore: verdict(beforeAnalysis).status,
+      verdictAfter: verdict(afterAnalysis).status
+    };
+  }
+
+  /*
+   * The engine trims the plan before counting lines, so a plan that starts
+   * with blank lines reports line 1 for what the editor shows as line 3.
+   * Returns a copy of the analysis whose finding lines match the editor.
+   */
+  function withEditorLines(analysis, text) {
+    if (!analysis) return analysis;
+    var src = String(text == null ? "" : text);
+    var lead = src.length - src.replace(/^\s+/, "").length;
+    var offset = (src.slice(0, lead).match(/\n/g) || []).length;
+    if (!offset) return analysis;
+    var copy = {};
+    for (var k in analysis) if (Object.prototype.hasOwnProperty.call(analysis, k)) copy[k] = analysis[k];
+    copy.findings = (analysis.findings || []).map(function (f) {
+      var g = {};
+      for (var key in f) if (Object.prototype.hasOwnProperty.call(f, key)) g[key] = f[key];
+      if (g.line > 0) g.line += offset;
+      return g;
+    });
+    copy.lineOffset = offset;
+    return copy;
+  }
+
   var api = {
     seeded: seeded,
+    withEditorLines: withEditorLines,
     hashString: hashString,
     simulate: simulate,
     scoreBreakdown: scoreBreakdown,
     scannerCoverage: scannerCoverage,
-    analysisSignature: analysisSignature
+    analysisSignature: analysisSignature,
+    verdict: verdict,
+    primaryFinding: primaryFinding,
+    flaggedLines: flaggedLines,
+    lineDiff: lineDiff,
+    containment: containment
   };
   root.BlastTelemetry = api;
   if (typeof module !== "undefined" && module.exports) module.exports = api;

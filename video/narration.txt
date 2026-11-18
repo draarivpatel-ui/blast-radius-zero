@@ -1,0 +1,13 @@
+Autonomous agents now propose real infrastructure changes in the middle of an incident. One bad command can wipe a database or leak every secret. BlastRadius Zero is a firewall that checks each plan before anything runs, and it works completely offline.
+
+Here is a runaway GPU billing loop. The agents proposed scaling to 48 GPUs, flushing the cache and force deleting pods. The verdict is BLOCKED, with a blast score of 89. The console names the rule that decided it: R03 GPU scale, on line 6.
+
+The rule inspector explains every finding. Click R01 flushall. It shows the matched line, the policy, the fix, and the resources it reaches. The same line is flagged in the plan editor, and the map outlines the Redis cluster.
+
+Now load a benign plan, a rolling restart. ALLOW, score zero. Inject a DROP TABLE, and the gate flips to BLOCKED right away. An autoscaler with a ceiling of fifty is not destructive, but it can blow the budget, so the verdict is APPROVAL REQUIRED.
+
+Switch to the destructive migration. Seven findings, score 100. Flip the map to after containment. The safe plan keeps all four resources out of the blast radius, and the diff shows exactly which lines change. Apply the safe plan, and the verdict drops to ALLOW, score zero.
+
+Text scanning explains a plan, but the typed action gate makes the real decision, one structured action at a time. A test run is allowed. Network egress is denied. A path that escapes the workspace is denied.
+
+Every number comes from the real rules and a fixed seed, so a replay is identical. The page exports JSON, Markdown and SARIF audits, plus a local SHA-256 receipt. Nothing is executed, and nothing leaves the browser. 73 Node tests and 72 Python tests pass.

@@ -23,29 +23,63 @@
     };
   }
   function createPanel() {
-    const main = document.querySelector("main.studio");
-    if (!main) return;
-    const panel = document.createElement("section");
-    panel.id = "vultrSandboxBar";
-    panel.style.cssText = "grid-column:1/-1;padding:16px;border:1px solid #334155;border-radius:8px";
-    panel.innerHTML = '<h2>Local Policy Analysis Receipt</h2>' +
-      '<p>Real policy findings, measured analysis time and a WebCrypto SHA-256 digest. No Vultr container, gVisor process or cloud workload is launched.</p>' +
-      '<button class="btn-primary btn-sm" id="btnDispatchSandbox">Generate Local Receipt</button>' +
-      '<pre id="vultrSandboxReceipt" aria-live="polite" style="white-space:pre-wrap;overflow-wrap:anywhere"></pre>';
-    main.appendChild(panel);
+    let panel = document.getElementById("receiptPanel");
+    if (!panel) {
+      const main = document.querySelector("main.studio");
+      if (!main) return;
+      panel = document.createElement("section");
+      panel.id = "receiptPanel";
+      panel.className = "panel";
+      main.appendChild(panel);
+    }
+    const body = document.createElement("div");
+    body.innerHTML =
+      '<dl class="receipt-grid" id="receiptSummary"></dl>' +
+      '<button type="button" class="btn btn-ghost btn-sm" id="btnDispatchSandbox">Generate local receipt</button>' +
+      '<details class="receipt-raw"><summary>Raw receipt JSON</summary>' +
+      '<pre id="vultrSandboxReceipt" aria-live="polite"></pre></details>' +
+      '<p class="note">Real policy findings, measured analysis time and a WebCrypto SHA-256 digest. No Vultr container, gVisor process or cloud workload is launched, and a digest is not a signature.</p>';
+    panel.appendChild(body);
+    const summary = document.getElementById("receiptSummary");
+    const row = (k, v, off) => {
+      const dt = document.createElement("dt"); dt.textContent = k;
+      const dd = document.createElement("dd"); dd.textContent = v;
+      if (off) dd.className = "is-off";
+      summary.appendChild(dt); summary.appendChild(dd);
+    };
     const update = async () => {
       const current = ++generation;
       const output = document.getElementById("vultrSandboxReceipt");
       const editor = document.getElementById("proposalEditor");
       try {
         const receipt = await createReceipt(editor?.value || "");
-        if (current === generation) output.textContent = JSON.stringify(receipt, null, 2);
+        if (current !== generation) return;
+        output.textContent = JSON.stringify(receipt, null, 2);
+        summary.textContent = "";
+        row("SHA-256", receipt.receipt_sha256);
+        row("Score", String(receipt.score) + "/100, " + receipt.findings.length + " finding" + (receipt.findings.length === 1 ? "" : "s"));
+        row("Analysis time", receipt.elapsed_ms.toFixed(2) + " ms (measured)");
+        row("Execution", "not performed, not authorized", true);
+        row("Cloud", "not connected", true);
       } catch (_) {
-        if (current === generation) output.textContent = "Analysis failed. Execution remains unauthorized.";
+        if (current === generation) {
+          output.textContent = "Analysis failed. Execution remains unauthorized.";
+          summary.textContent = "";
+          row("Status", "Analysis failed. Execution remains unauthorized.", true);
+        }
       }
     };
     document.getElementById("btnDispatchSandbox").addEventListener("click", update);
-    document.getElementById("proposalEditor")?.addEventListener("input", update);
+    let timer = null;
+    document.getElementById("proposalEditor")?.addEventListener("input", () => {
+      clearTimeout(timer);
+      timer = setTimeout(update, 200);
+    });
+    // Editor changes made by buttons do not fire "input"; refresh after any click in the studio.
+    document.querySelector("main.studio")?.addEventListener("click", () => {
+      clearTimeout(timer);
+      timer = setTimeout(update, 200);
+    });
     update();
   }
   root.BlastReceipt = { createReceipt };

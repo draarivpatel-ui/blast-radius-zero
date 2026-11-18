@@ -545,6 +545,6 @@
   }
 
   // Expose
-  window.BlastPolicy = { analyze, POLICIES, ALL_RESOURCES, RULES };
+  window.BlastPolicy = { analyze, affectedFromFindings, POLICIES, ALL_RESOURCES, RULES };
 
 })();

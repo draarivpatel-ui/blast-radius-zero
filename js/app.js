@@ -1,21 +1,49 @@
 /**
  * BlastRadius Zero - Interactive Controller
- * Scenario switching · live AST analysis · SVG topology · dry-run chart · audit exports
+ * Verdict console, plan editor with flagged-line gutter, rule inspector,
+ * blast-radius map with before/after containment, line diff, modeled
+ * dry-run chart, typed action gate presets and audit exports.
+ *
+ * Every piece of editor text reaches the page through textContent or
+ * escapeHtml. Nothing here executes a command or makes a network request.
  */
 (function () {
   "use strict";
 
-  // ── State ────────────────────────────────────────────────────────────
+  // ---- State -------------------------------------------------------------
   let currentId = null;
   let currentScenario = null;
   let analysis = null;
+  let safeAnalysis = null;
   let dryRunRaf = null;
+  let selectedFinding = 0;
+  let pickedKey = null; // rule|line|snippet of the finding the user picked
+  let graphView = "proposed";
+  let lastVerdictKey = null;
 
-  // ── DOM helpers ─────────────────────────────────────────────────────
+  // ---- DOM helpers -------------------------------------------------------
   const $ = (sel, root = document) => root.querySelector(sel);
   const $$ = (sel, root = document) => [...root.querySelectorAll(sel)];
 
-  // ── Scenario data ───────────────────────────────────────────────────
+  function el(tag, cls, text) {
+    const node = document.createElement(tag);
+    if (cls) node.className = cls;
+    if (text !== undefined && text !== null) node.textContent = String(text);
+    return node;
+  }
+  function clear(node) {
+    while (node && node.firstChild) node.removeChild(node.firstChild);
+    if (node && node.children && node.children.length) node.innerHTML = "";
+  }
+
+  const ICONS = {
+    chevron: '<path d="M6 9l6 6 6-6"/>'
+  };
+  function icon(name, cls) {
+    return `<svg class="ico${cls ? " " + cls : ""}" viewBox="0 0 24 24" aria-hidden="true">${ICONS[name] || ""}</svg>`;
+  }
+
+  // ---- Scenario data -----------------------------------------------------
   function allScenarios() {
     return [...window.BlastScenarios.SCENARIOS, window.BlastScenarios.CUSTOM_TEMPLATE];
   }
@@ -23,157 +51,152 @@
     return allScenarios().find(s => s.id === id) || allScenarios()[0];
   }
 
-  // ── Render: scenario switcher ─────────────────────────────────────
+  const SCENARIO_KIND = {
+    "gpu-loop": "COST",
+    "destructive-migration": "DATA",
+    "bgp-stampede": "AVAILABILITY",
+    "prompt-injection": "SECRETS"
+  };
+  const SCENARIO_SHORT = {
+    "gpu-loop": "Runaway GPU billing loop",
+    "destructive-migration": "Destructive prod migration",
+    "bgp-stampede": "Cache stampede under flash traffic",
+    "prompt-injection": "Prompt-injected PR agent"
+  };
+
+  // One-click plans that replace the editor. Verdicts are not hard-coded:
+  // each label below was checked against the real engine by the test suite.
+  const LOAD_PLANS = [
+    {
+      label: "Benign: rolling restart",
+      cls: "chip-benign",
+      text: "# Benign maintenance plan\nkubectl rollout restart deployment/web -n prod\nkubectl rollout status deployment/web -n prod --timeout=120s"
+    },
+    {
+      label: "Benign: read-only query",
+      cls: "chip-benign",
+      text: "-- Read-only triage query\nSELECT status, count(*) FROM jobs GROUP BY status;"
+    },
+    {
+      label: "Needs approval: autoscale to 50",
+      cls: "chip-approval",
+      text: "# HorizontalPodAutoscaler for the web tier\nminReplicas: 3\nmaxReplicas: 50"
+    }
+  ];
+
+  // ---- Scenario switcher -------------------------------------------------
   function renderScenarioSwitcher() {
     const grid = $("#scenarioGrid");
     if (!grid) return;
-    const scenarios = window.BlastScenarios.SCENARIOS;
-    grid.innerHTML = "";
-
-    for (const sc of scenarios) {
-      const card = document.createElement("div");
-      card.className = "scenario-card";
-      card.dataset.id = sc.id;
+    clear(grid);
+    for (const sc of window.BlastScenarios.SCENARIOS) {
+      const card = el("button", "scenario-card");
+      card.type = "button";
+      card.setAttribute("data-id", sc.id);
+      card.setAttribute("aria-pressed", "false");
+      card.setAttribute("title", sc.title);
       card.style.setProperty("--card-accent", sc.color);
-      card.innerHTML = `
-        <div class="sc-card-top">
-          <div class="sc-icon" style="background:${sc.color}">${sc.icon}</div>
-          <span class="sc-badge ${sc.badgeClass}">${sc.badge}</span>
-        </div>
-        <h3>${sc.title}</h3>
-        <p>${sc.severity}</p>
-      `;
+      card.setAttribute("aria-label", (SCENARIO_SHORT[sc.id] || sc.title) + ", " + (SCENARIO_KIND[sc.id] || sc.badge).toLowerCase() + " incident");
+      card.appendChild(el("span", "sc-dot"));
+      card.appendChild(el("span", "sc-title", SCENARIO_SHORT[sc.id] || sc.title));
       card.addEventListener("click", () => selectScenario(sc.id));
       grid.appendChild(card);
     }
-
-    // Composer row
-    const composer = document.createElement("div");
-    composer.className = "composer-card";
-    composer.dataset.id = "custom";
-    composer.innerHTML = `
-      <div class="composer-icon">✦</div>
-      <div>
-        <h4>Custom Incident Composer</h4>
-        <p>Define your own incident - edit telemetry, proposal &amp; topology, then test the gatekeeper live.</p>
-      </div>
-    `;
-    composer.addEventListener("click", () => selectScenario("custom"));
-    grid.appendChild(composer);
-
     syncScenarioActive();
   }
 
   function syncScenarioActive() {
-    $$(".scenario-card, .composer-card").forEach(el => {
-      el.classList.toggle("active", el.dataset.id === currentId);
+    $$(".scenario-card").forEach(node => {
+      node.setAttribute("aria-pressed", node.getAttribute("data-id") === currentId ? "true" : "false");
     });
   }
 
-  // ── Select scenario ─────────────────────────────────────────────────
   function selectScenario(id) {
     currentId = id;
     currentScenario = getScenario(id);
+    graphView = "proposed";
     syncScenarioActive();
     renderAll();
-    // Focus editor for custom
     if (id === "custom") {
       setTimeout(() => { const ed = $("#proposalEditor"); if (ed) ed.focus(); }, 80);
     }
   }
 
-  // ── Render all panels ──────────────────────────────────────────────
   function renderAll() {
     if (!currentScenario) return;
-    renderLeft();
-    // Populate editor then analyze (which renders center/right)
+    safeAnalysis = window.BlastPolicy.analyze(currentScenario.safeRemediation);
+    renderContext();
     populateEditor();
+    refresh();
+  }
+
+  // Re-run every view that depends on the editor text.
+  function refresh() {
     analyzeAndRender();
     renderRightDiff();
     startDryRunAnimation();
   }
 
-  // ── Left panel ──────────────────────────────────────────────────────
-  function renderLeft() {
+  // ---- Incident context --------------------------------------------------
+  function renderContext() {
     const sc = currentScenario;
     const subEl = $("#leftSubtitle");
     if (subEl) subEl.textContent = sc.severity;
 
-    // Metrics
     const mg = $("#metricsGrid");
     if (mg) {
       mg.innerHTML = sc.metrics.map(m => `
         <div class="metric-card">
-          <div class="metric-label">${m.label}</div>
-          <div class="metric-value">${m.value}</div>
-          <div class="metric-delta ${m.state}">${m.delta}</div>
-        </div>
-      `).join("");
+          <div class="metric-label">${escapeHtml(m.label)}</div>
+          <div class="metric-value">${escapeHtml(m.value)}</div>
+          <div class="metric-delta ${escapeHtml(m.state)}">${escapeHtml(m.delta)}</div>
+        </div>`).join("");
     }
 
-    // Logs
     const ll = $("#logLines");
     if (ll) {
       ll.innerHTML = sc.logs.map(l => `
-        <div class="log-line lvl-${l.lvl}">
-          <span class="log-time">${l.t}</span>
-          <span class="log-lvl ${l.lvl}">${l.lvl}</span>
+        <div class="log-line lvl-${escapeHtml(l.lvl)}">
+          <span class="log-time">${escapeHtml(l.t)}</span>
+          <span class="log-lvl ${escapeHtml(l.lvl)}">${escapeHtml(l.lvl)}</span>
           <span class="log-msg">${escapeHtml(l.msg)}</span>
-        </div>
-      `).join("");
+        </div>`).join("");
     }
 
-    // Agent cards
     const al = $("#agentList");
     if (al) {
       al.innerHTML = sc.agentProposals.map((a, i) => `
-        <div class="agent-card ${i === 0 ? "open" : ""}" data-idx="${i}">
-          <div class="agent-card-head">
-            <div class="agent-avatar" style="background:${avatarColor(a.avatar)}">${a.avatar}</div>
-            <div class="agent-meta">
-              <h4>${a.agent}</h4>
-              <p>${a.role}</p>
-            </div>
-            <span class="agent-chevron">▾</span>
-          </div>
-          <div class="agent-body">
+        <div class="agent-card">
+          <button type="button" class="agent-card-head" aria-expanded="${i === 0 ? "true" : "false"}" aria-controls="agentBody${i}">
+            <span class="agent-avatar" style="background:${avatarColor(a.avatar)}">${escapeHtml(a.avatar)}</span>
+            <span class="agent-meta"><h4>${escapeHtml(a.agent)}</h4><span>${escapeHtml(a.role)}</span></span>
+            ${icon("chevron", "agent-chevron")}
+          </button>
+          <div class="agent-body" id="agentBody${i}"${i === 0 ? "" : " hidden"}>
             <div class="agent-summary">${escapeHtml(a.summary)}</div>
             <pre class="agent-proposal">${escapeHtml(a.proposalText)}</pre>
           </div>
-        </div>
-      `).join("");
-
-      // Toggle handlers
+        </div>`).join("");
       al.querySelectorAll(".agent-card-head").forEach(head => {
         head.addEventListener("click", () => {
-          const card = head.closest(".agent-card");
-          if (card) card.classList.toggle("open");
+          const open = head.getAttribute("aria-expanded") === "true";
+          head.setAttribute("aria-expanded", open ? "false" : "true");
+          const body = $("#" + head.getAttribute("aria-controls"));
+          if (body) body.hidden = open;
         });
       });
     }
+  }
 
-    // Inject chips
-    const injectRow = $("#injectRow");
-    if (injectRow) {
-      injectRow.innerHTML = "";
-      const chips = [
-        { label: "rm -rf /tmp/cache", cls: "", snippet: "\nrm -rf /tmp/cache\n" },
-        { label: "DROP TABLE users", cls: "", snippet: "\nDROP TABLE users;\n" },
-        { label: "DELETE without WHERE", cls: "", snippet: "\nDELETE FROM users;\n" },
-        { label: "FLUSHALL", cls: "", snippet: "\nredis-cli FLUSHALL\n" },
-        { label: "terraform destroy", cls: "", snippet: "\nterraform destroy -auto-approve\n" },
-        { label: "Fix all (expand-contract)", cls: "safe", snippet: null, safe: true },
-      ];
-      for (const c of chips) {
-        const b = document.createElement("button");
-        b.className = "chip" + (c.cls ? " " + c.cls : "");
-        b.textContent = c.label;
-        b.addEventListener("click", () => {
-          if (c.safe) applySafeFix();
-          else injectSnippet(c.snippet);
-        });
-        injectRow.appendChild(b);
-      }
+  function renderLoadPlans() {
+    const row = $("#injectRow");
+    if (!row) return;
+    clear(row);
+    for (const p of LOAD_PLANS) {
+      const b = el("button", "chip " + p.cls, p.label);
+      b.type = "button";
+      b.addEventListener("click", () => loadPlan(p));
+      row.appendChild(b);
     }
   }
 
@@ -181,208 +204,395 @@
     const ed = $("#proposalEditor");
     if (!ed || !currentScenario) return;
     ed.value = currentScenario.rawPlan;
+    ed.scrollTop = 0;
   }
 
-  // ── Live analysis ──────────────────────────────────────────────────
+  // ---- Analysis ----------------------------------------------------------
   function analyzeAndRender() {
     const ed = $("#proposalEditor");
     const text = ed ? ed.value : "";
-    analysis = window.BlastPolicy.analyze(text);
+    analysis = window.BlastTelemetry.withEditorLines(window.BlastPolicy.analyze(text), text);
+    syncSelection();
     renderCenter();
+    renderGutter();
+    renderInspector();
     renderTopology();
     renderDiagnostics();
     syncHeader();
   }
 
-  // ── Center panel ───────────────────────────────────────────────────
+  // Keep the user's pick while it still exists; otherwise inspect the
+  // finding that decided the verdict.
+  function findingKey(f) { return f ? f.rule + "|" + f.line + "|" + f.snippet : null; }
+  function syncSelection() {
+    const list = analysis ? analysis.findings : [];
+    const kept = pickedKey ? list.findIndex(f => findingKey(f) === pickedKey) : -1;
+    if (kept >= 0) { selectedFinding = kept; return; }
+    pickedKey = null;
+    const primary = window.BlastTelemetry.primaryFinding(analysis);
+    selectedFinding = primary ? Math.max(0, list.indexOf(primary)) : 0;
+  }
+
+  function currentVerdict() {
+    return window.BlastTelemetry.verdict(analysis);
+  }
+
+  // ---- Verdict console + policy cards ------------------------------------
   function renderCenter() {
     if (!analysis) return;
-
-    // Score ring
+    const v = currentVerdict();
     const score = analysis.score;
-    const fg = $("#scoreRingFg");
-    const numEl = $("#scoreNum");
-    const titleEl = $("#blastTitle");
-    const descEl = $("#blastDesc");
-    const pill = $("#verdictPill");
 
+    const consoleEl = $("#verdictConsole");
+    if (consoleEl) consoleEl.setAttribute("data-verdict", v.key);
+
+    const fg = $("#scoreRingFg");
     if (fg) {
-      const CIRC = 201; // 2πr ≈ 201 for r=32
-      const offset = CIRC - (Math.min(score, 100) / 100) * CIRC;
-      fg.style.strokeDashoffset = String(offset);
-      // Color by severity
-      let color;
-      if (score >= 70) color = "#EF4444";
-      else if (score >= 35) color = "#F59E0B";
-      else if (score >= 12) color = "#EAB308";
-      else color = "#10B981";
-      fg.style.stroke = color;
+      const CIRC = 201; // 2 * pi * 32
+      fg.style.strokeDashoffset = String(CIRC - (Math.min(score, 100) / 100) * CIRC);
     }
-    if (numEl) {
-      numEl.textContent = score;
-      numEl.style.color = score >= 70 ? "#EF4444" : score >= 35 ? "#F59E0B" : score < 12 ? "#10B981" : "#EAB308";
+    const numEl = $("#scoreNum");
+    if (numEl) numEl.textContent = String(score);
+
+    const word = $("#verdictWord");
+    if (word) {
+      word.textContent = v.label;
+      if (lastVerdictKey !== null && lastVerdictKey !== v.key) {
+        word.classList.remove("is-changing");
+        void word.offsetWidth;
+        word.classList.add("is-changing");
+      }
     }
-    if (titleEl) {
-      if (analysis.clean) titleEl.textContent = "✓ No violations - proposal converges to safe state";
-      else if (score >= 70) titleEl.textContent = "⛔ Blast radius critical - gate BLOCKED";
-      else if (score >= 35) titleEl.textContent = "⚠ Blast radius elevated - gate BLOCKED";
-      else titleEl.textContent = "⚠ Minor risks - review required";
-    }
-    if (descEl) {
-      if (analysis.clean) descEl.textContent = "All 4 deterministic policies pass. Safe to proceed to shadow dry-run.";
-      else descEl.textContent = `${analysis.findings.length} finding(s) across ${analysis.violations.length} polic${analysis.violations.length === 1 ? "y" : "ies"} - affected resources highlighted below.`;
-    }
-    if (pill) {
-      pill.className = "verdict-pill";
-      if (analysis.clean) {
-        pill.classList.add("pass");
-        pill.textContent = "✓ PASS - Zero blast radius";
-      } else if (score >= 70) {
-        pill.classList.add("block");
-        pill.textContent = `⛔ BLOCKED - Score ${score}/100 · ${analysis.violations.join(", ")}`;
-      } else if (score >= 35) {
-        pill.classList.add("block");
-        pill.textContent = `⛔ BLOCKED - Score ${score}/100`;
+    lastVerdictKey = v.key;
+
+    const reason = $("#blastTitle");
+    const primary = window.BlastTelemetry.primaryFinding(analysis);
+    if (reason) {
+      reason.textContent = "";
+      if (!primary) {
+        reason.textContent = "No rule fired. All four policies pass, so the plan may go to the shadow dry-run.";
       } else {
-        pill.classList.add("warn");
-        pill.textContent = `⚠ WARN - Score ${score}/100 · needs review`;
+        reason.appendChild(document.createTextNode(primary.line > 0 ? `Line ${primary.line} fired ` : "Fired "));
+        reason.appendChild(el("code", null, primary.rule));
+        reason.appendChild(document.createTextNode(": " + primary.message));
       }
     }
 
-    // Policy grid
+    const desc = $("#blastDesc");
+    if (desc) {
+      const n = analysis.findings.length;
+      const p = analysis.violations.length;
+      const r = analysis.affected.length;
+      desc.textContent = n === 0 ? "0 findings across 4 policies. Blast radius: 0 resources."
+        : `${n} finding${n === 1 ? "" : "s"} across ${p} polic${p === 1 ? "y" : "ies"}. Blast radius: ${r} resource${r === 1 ? "" : "s"}.`;
+    }
+
+    const pill = $("#verdictPill");
+    if (pill) {
+      pill.textContent = v.key === "allow" ? "Cleared for the shadow dry-run"
+        : v.key === "approval" ? "Held until a human approves"
+        : "Held at the gate. Nothing runs.";
+    }
+
     const pg = $("#policyGrid");
     if (pg) {
       pg.innerHTML = analysis.policyStates.map(p => {
-        const statusLabel = p.status === "block" ? "BLOCK" : p.status === "warn" ? "WARN" : "PASS";
+        const statusLabel = p.status === "block" ? "BLOCK" : p.status === "warn" ? "APPROVAL" : "PASS";
         return `
-          <div class="policy-card ${p.status}">
+          <div class="policy-card ${escapeHtml(p.status)}">
             <div class="policy-card-head">
-              <span class="policy-id">${p.id}</span>
-              <span class="policy-status ${p.status}">${statusLabel}${p.count ? ` · ${p.count}` : ""}</span>
+              <span class="policy-id">${escapeHtml(p.id)}</span>
+              <span class="policy-status ${escapeHtml(p.status)}">${statusLabel}${p.count ? ` ${p.count}` : ""}</span>
             </div>
-            <h4>${p.name}</h4>
-            <p>${policyDesc(p.id)}</p>
-          </div>
-        `;
+            <h4>${escapeHtml(p.name)}</h4>
+            <p>${escapeHtml(policyDesc(p.id))}</p>
+          </div>`;
       }).join("");
-    }
-
-    // Findings
-    const fl = $("#findingsList");
-    if (fl) {
-      if (analysis.findings.length === 0) {
-        fl.innerHTML = `<div style="padding:10px 12px;background:var(--bg2);border:1px solid var(--safe-border);border-radius:10px;color:var(--safe2);font-size:11.5px">✓ No findings - all deterministic checks pass. Proceed to dry-run.</div>`;
-      } else {
-        fl.innerHTML = analysis.findings.map(f => {
-          const sev = f.severity >= 8 ? "block" : "warn";
-          const icon = f.severity >= 9 ? "⛔" : f.severity >= 7 ? "⚠" : "•";
-          return `
-            <div class="finding ${sev}">
-              <div class="finding-icon" style="background:${sev === "block" ? "var(--danger-bg)" : "var(--amber-bg)"};border:1px solid ${sev === "block" ? "var(--danger-border)" : "var(--amber-border)"};color:${sev === "block" ? "var(--danger2)" : "var(--amber2)"}">${icon}</div>
-              <div class="finding-body">
-                <h4>${escapeHtml(f.message)}</h4>
-                <p><b>${f.rule}</b> · ${f.policy} · line ${f.line} - ${escapeHtml(f.remediation)}</p>
-                <div class="finding-meta"><b>Snippet:</b> <code>${escapeHtml(f.snippet)}</code></div>
-              </div>
-            </div>
-          `;
-        }).join("");
-      }
     }
   }
 
   function policyDesc(id) {
     const m = {
-      "POL-01": "Blocks unbounded deletions: rm -rf, DROP, TRUNCATE, FLUSHALL, delete --all.",
-      "POL-02": "Blocks privilege escalation: iam:*, AdministratorAccess, Resource \"*\".",
-      "POL-03": "Blocks cost explosions: GPU scale, replica surge, unbounded autoscale.",
-      "POL-04": "Blocks secret exfiltration: curl/wget with env/secrets to external hosts.",
+      "POL-01": "Unbounded deletion: rm -rf, DROP, TRUNCATE, FLUSHALL, delete --all.",
+      "POL-02": "Privilege escalation: iam:*, AdministratorAccess, Resource \"*\".",
+      "POL-03": "Cost explosion: GPU scale, replica surge, unbounded autoscale.",
+      "POL-04": "Secret exfiltration: curl or wget carrying env or secrets out.",
     };
     return m[id] || "";
   }
 
-  // ── Topology SVG ───────────────────────────────────────────────────
+  // ---- Editor gutter -----------------------------------------------------
+  function renderGutter() {
+    const gutter = $("#editorGutter");
+    const ed = $("#proposalEditor");
+    if (!gutter || !ed || !analysis) return;
+    const lines = ed.value.split("\n").length;
+    const flags = window.BlastTelemetry.flaggedLines(analysis);
+    const sel = analysis.findings[selectedFinding];
+    let html = "";
+    for (let i = 1; i <= lines; i++) {
+      const sev = flags[i] || 0;
+      const cls = (sev >= 8 ? "is-block" : sev > 0 ? "is-warn" : "") + (sel && sel.line === i ? " is-selected" : "");
+      html += `<span class="${cls.trim()}">${i}</span>`;
+    }
+    gutter.innerHTML = html;
+    gutter.scrollTop = ed.scrollTop;
+  }
+
+  // ---- Rule inspector ----------------------------------------------------
+  function renderInspector() {
+    const list = $("#findingsList");
+    const detail = $("#ruleDetail");
+    const count = $("#ruleCount");
+    if (!analysis) return;
+    const findings = analysis.findings;
+    if (count) count.textContent = `${findings.length} fired`;
+    if (list) {
+      clear(list);
+      if (findings.length === 0) {
+        list.appendChild(el("div", "empty-state", "No rule fired. Inject an attack above to watch the inspector explain it."));
+      }
+      findings.forEach((f, i) => {
+        const sev = f.severity >= 8 ? "block" : "warn";
+        const b = el("button", "finding");
+        b.type = "button";
+        b.setAttribute("role", "option");
+        b.setAttribute("aria-selected", i === selectedFinding ? "true" : "false");
+        b.appendChild(el("span", "sev " + sev, "S" + f.severity));
+        b.appendChild(el("span", "finding-rule", f.rule));
+        b.appendChild(el("span", "finding-line", f.line > 0 ? "L" + f.line : "-"));
+        b.addEventListener("click", () => selectFinding(i, true));
+        list.appendChild(b);
+      });
+    }
+    if (detail) {
+      clear(detail);
+      const f = findings[selectedFinding];
+      if (f) detail.appendChild(buildRuleCard(f));
+    }
+  }
+
+  function buildRuleCard(f) {
+    const sev = f.severity >= 8 ? "block" : "warn";
+    const card = el("div", "rd-card");
+    const head = el("div", "rd-head");
+    head.appendChild(el("h3", null, f.label || f.rule));
+    head.appendChild(el("span", "sev " + sev, "Severity " + f.severity + "/10"));
+    card.appendChild(head);
+    card.appendChild(el("p", "rd-why", f.message));
+    const match = el("pre", "rd-match " + sev);
+    match.appendChild(el("b", null, f.line > 0 ? "line " + f.line : "engine"));
+    match.appendChild(document.createTextNode(f.snippet || "(no snippet)"));
+    card.appendChild(match);
+    const dl = el("dl", "rd-grid");
+    const resources = resourcesFor(f);
+    const rows = [
+      ["Rule", f.rule],
+      ["Policy", f.policy + " " + policyName(f.policy)],
+      ["Effect", f.severity >= 8 ? "Blocks the plan on its own" : "Needs human approval"],
+      ["Reaches", resources.length ? resources.map(resourceLabel).join(", ") : "No mapped resource"]
+    ];
+    for (const [k, val] of rows) {
+      dl.appendChild(el("dt", null, k));
+      dl.appendChild(el("dd", null, val));
+    }
+    card.appendChild(dl);
+    card.appendChild(el("p", "rd-fix", "Fix: " + f.remediation));
+    return card;
+  }
+
+  function selectFinding(i, jump) {
+    selectedFinding = i;
+    pickedKey = findingKey(analysis && analysis.findings[i]);
+    renderInspector();
+    renderGutter();
+    renderTopology();
+    const f = analysis && analysis.findings[i];
+    if (jump && f && f.line > 0) jumpToLine(f.line);
+  }
+
+  function jumpToLine(line) {
+    const ed = $("#proposalEditor");
+    if (!ed) return;
+    const lines = ed.value.split("\n");
+    let start = 0;
+    for (let i = 0; i < line - 1 && i < lines.length; i++) start += lines[i].length + 1;
+    const end = start + (lines[line - 1] || "").length;
+    ed.scrollTop = Math.max(0, (line - 4) * 20);
+    if (typeof ed.setSelectionRange === "function") ed.setSelectionRange(start, end);
+    renderGutterScroll();
+  }
+
+  function renderGutterScroll() {
+    const gutter = $("#editorGutter");
+    const ed = $("#proposalEditor");
+    if (gutter && ed) gutter.scrollTop = ed.scrollTop;
+  }
+
+  function resourcesFor(f) {
+    const fn = window.BlastPolicy.affectedFromFindings;
+    return typeof fn === "function" ? fn([f]) : [];
+  }
+  function resourceLabel(id) {
+    const r = (window.BlastPolicy.ALL_RESOURCES || []).find(x => x.id === id);
+    return r ? r.label : id;
+  }
+  function policyName(id) {
+    const p = (window.BlastPolicy.POLICIES || []).find(x => x.id === id);
+    return p ? p.name : "";
+  }
+
+  // ---- Blast-radius map --------------------------------------------------
   function renderTopology() {
     const svg = $("#topoSvg");
-    if (!svg || !currentScenario) return;
-    const topo = currentScenario.topology;
-    const affected = new Set(analysis ? analysis.affected : []);
-
-    // Colors by kind
-    const kindColor = {
-      network: "#3B82F6",
-      compute: "#8B5CF6",
-      database: "#06B6D4",
-      cache: "#F59E0B",
-      security: "#EF4444",
-      storage: "#10B981",
-    };
+    if (!svg || !currentScenario || !analysis) return;
+    const topo = layoutFor(currentScenario.topology, svg);
+    const contain = window.BlastTelemetry.containment(analysis, safeAnalysis);
+    if (!hasSafePlan()) graphView = "proposed";
+    const showAfter = graphView === "contained";
+    const hit = new Set(showAfter ? contain.residual : contain.before);
+    const contained = new Set(showAfter ? contain.contained : []);
+    const sel = analysis.findings[selectedFinding];
+    const focus = new Set(sel && !showAfter ? resourcesFor(sel) : []);
 
     let html = "";
-
-    // Edges (behind nodes)
     for (const [a, b] of topo.edges) {
       const na = topo.nodes.find(n => n.id === a);
       const nb = topo.nodes.find(n => n.id === b);
       if (!na || !nb) continue;
-      const isAffected = affected.has(a) || affected.has(b);
-      const bothAffected = affected.has(a) && affected.has(b);
-      const stroke = bothAffected ? "#EF4444" : isAffected ? "rgba(239,68,68,.55)" : "var(--border2)";
-      const dash = isAffected ? "" : "";
-      html += `<line class="topo-edge ${isAffected ? "affected" : ""}" x1="${na.x}" y1="${na.y}" x2="${nb.x}" y2="${nb.y}" stroke="${stroke}" ${dash} />`;
+      const cls = hit.has(a) && hit.has(b) ? "is-hit" : contained.has(a) && contained.has(b) ? "is-contained" : "";
+      html += `<line class="topo-edge ${cls}" x1="${na.x}" y1="${na.y}" x2="${nb.x}" y2="${nb.y}" />`;
     }
-
-    // Nodes
+    const w = 150, h = 50;
     for (const n of topo.nodes) {
-      const isAff = affected.has(n.id);
-      const base = kindColor[n.kind] || "#6B7280";
-      const fill = isAff ? "rgba(239,68,68,.14)" : "rgba(255,255,255,.04)";
-      const stroke = isAff ? "#EF4444" : base;
-      const w = 118, h = 44;
+      const state = hit.has(n.id) ? "is-hit" : contained.has(n.id) ? "is-contained" : "";
+      const stateText = hit.has(n.id) ? "in the blast radius" : contained.has(n.id) ? "contained by the safe plan" : "untouched";
+      const x = n.x - w / 2, y = n.y - h / 2;
       html += `
-        <g class="topo-node ${isAff ? "affected" : ""}" data-id="${n.id}">
-          <rect x="${n.x - w / 2}" y="${n.y - h / 2}" width="${w}" height="${h}" rx="10" ry="10" fill="${fill}" stroke="${stroke}" stroke-width="${isAff ? 2 : 1.2}" />
-          <circle cx="${n.x - w / 2 + 14}" cy="${n.y - 6}" r="6" fill="${stroke}" opacity=".95" />
-          <text x="${n.x - w / 2 + 26}" y="${n.y - 2}" font-size="10.5" font-weight="700" fill="#E8ECF4" font-family="Inter,system-ui,sans-serif">${escapeHtml(n.label)}</text>
-          <text x="${n.x - w / 2 + 26}" y="${n.y + 10}" font-size="8.5" fill="#7A869E" font-family="JetBrains Mono,monospace">${escapeHtml(n.sub)}</text>
-          ${isAff ? `<text x="${n.x + w / 2 - 10}" y="${n.y - h / 2 + 10}" font-size="9" fill="#EF4444">●</text>` : ""}
-        </g>
-      `;
+        <g class="topo-node ${state}${focus.has(n.id) ? " is-focus" : ""}" data-id="${escapeHtml(n.id)}" tabindex="0" role="button" aria-label="${escapeHtml(n.label)}, ${stateText}">
+          ${state === "is-hit" ? `<rect class="node-pulse" x="${x}" y="${y}" width="${w}" height="${h}" rx="10" />` : ""}
+          <rect class="node-box" x="${x}" y="${y}" width="${w}" height="${h}" rx="10" />
+          <circle class="node-dot" cx="${x + 16}" cy="${n.y - 5}" r="5" />
+          <text class="node-label" x="${x + 29}" y="${n.y - 1}">${escapeHtml(n.label)}</text>
+          <text class="node-sub" x="${x + 29}" y="${n.y + 14}">${escapeHtml(truncate(n.sub, 19))}</text>
+          ${focus.has(n.id) ? `<rect x="${x - 4}" y="${y - 4}" width="${w + 8}" height="${h + 8}" rx="13" fill="none" stroke="#60a5fa" stroke-width="1.4" stroke-dasharray="3 3" />` : ""}
+        </g>`;
     }
-
     svg.innerHTML = html;
 
-    // Click to highlight
     svg.querySelectorAll(".topo-node").forEach(g => {
-      g.addEventListener("click", () => {
+      const act = () => {
         const id = g.getAttribute("data-id");
-        toast(`${topo.nodes.find(n => n.id === id)?.label || id} - ${affected.has(id) ? "affected by proposal" : "not affected"}`);
-      });
+        const idx = analysis.findings.findIndex(f => resourcesFor(f).includes(id));
+        const label = topo.nodes.find(n => n.id === id)?.label || id;
+        if (idx >= 0 && !showAfter) {
+          selectFinding(idx, true);
+          toast(`${label}: reached by ${analysis.findings[idx].rule}`);
+        } else {
+          toast(`${label}: ${hit.has(id) ? "in the blast radius" : contained.has(id) ? "contained by the safe plan" : "not reached by this plan"}`);
+        }
+      };
+      g.addEventListener("click", act);
+      g.addEventListener("keydown", e => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); act(); } });
     });
+
+    const pressed = (id, on) => { const b = $(id); if (b) b.setAttribute("aria-pressed", on ? "true" : "false"); };
+    pressed("#graphProposed", !showAfter);
+    pressed("#graphContained", showAfter);
+    const gc = $("#graphContained");
+    if (gc) {
+      gc.disabled = !hasSafePlan();
+      gc.title = hasSafePlan() ? "Show the map after the safe plan" : "A custom scenario has no prewritten safe plan";
+    }
+
+    const note = $("#graphNote");
+    if (note) {
+      const onMap = new Set(topo.nodes.map(n => n.id));
+      const list = showAfter ? contain.residual : contain.before;
+      const offMap = list.filter(id => !onMap.has(id));
+      let text;
+      if (showAfter) {
+        text = `Safe plan: ${contain.contained.length} resource${contain.contained.length === 1 ? "" : "s"} contained, ${contain.residual.length} still reached. Score ${contain.scoreBefore} to ${contain.scoreAfter}.`;
+      } else {
+        text = list.length ? `${list.length} resource${list.length === 1 ? "" : "s"} in the blast radius.` : "Nothing in the blast radius.";
+      }
+      if (offMap.length) text += ` Not on this map: ${offMap.map(resourceLabel).join(", ")}.`;
+      note.textContent = text;
+    }
   }
 
-  // ── Right panel diff ───────────────────────────────────────────────
+  // The custom composer ships no safe plan, so nothing may claim containment.
+  function hasSafePlan() {
+    return !!currentScenario && currentScenario.id !== "custom";
+  }
+
+  // Phones get a two-column map so labels stay readable without a side scroller.
+  function layoutFor(topo, svg) {
+    const narrow = typeof window.matchMedia === "function" && window.matchMedia("(max-width: 640px)").matches;
+    if (!narrow) {
+      svg.setAttribute("viewBox", "0 0 520 260");
+      return topo;
+    }
+    const order = [...topo.nodes].sort((p, q) => p.y - q.y || p.x - q.x);
+    const nodes = order.map((n, i) => Object.assign({}, n, { x: i % 2 === 0 ? 86 : 254, y: 34 + Math.floor(i / 2) * 76 }));
+    svg.setAttribute("viewBox", `0 0 340 ${34 + Math.ceil(nodes.length / 2) * 76 - 18}`);
+    return { nodes, edges: topo.edges };
+  }
+
+  function setGraphView(view) {
+    graphView = view;
+    renderTopology();
+  }
+
+  // ---- Containment diff --------------------------------------------------
   function renderRightDiff() {
     if (!currentScenario) return;
-    const blocked = $("#diffBlocked");
-    const safe = $("#diffSafe");
-    if (blocked) {
-      // Show the raw proposal as blocked when dirty, else empty
-      if (analysis && !analysis.clean) {
-        blocked.textContent = currentScenario.rawPlan;
-        // Also show current editor content if different
-        const ed = $("#proposalEditor");
-        if (ed && ed.value.trim() !== currentScenario.rawPlan.trim()) {
-          blocked.textContent = ed.value;
-        }
-      } else {
-        blocked.textContent = " -  No blocked actions (proposal is clean)  - ";
+    const view = $("#diffView");
+    const stats = $("#diffStats");
+    const ed = $("#proposalEditor");
+    const copyBtn = $("#btnCopyDiff");
+    const safeBtn = $("#btnSafeFix");
+    if (copyBtn) copyBtn.disabled = !hasSafePlan();
+    if (safeBtn) safeBtn.disabled = !hasSafePlan();
+    if (!hasSafePlan()) {
+      if (stats) { clear(stats); stats.appendChild(el("span", null, "No safe plan to compare")); }
+      if (view) {
+        clear(view);
+        view.appendChild(el("div", "diff-empty", "A custom scenario has no prewritten safe plan, so there is nothing to contain against. Pick an incident above to see a containment diff."));
+      }
+      return;
+    }
+    const before = ed ? ed.value : currentScenario.rawPlan;
+    const ops = window.BlastTelemetry.lineDiff(before, currentScenario.safeRemediation);
+    const del = ops.filter(o => o.op === "del").length;
+    const add = ops.filter(o => o.op === "add").length;
+    if (stats) {
+      clear(stats);
+      const after = safeAnalysis || window.BlastPolicy.analyze(currentScenario.safeRemediation);
+      const vb = currentVerdict();
+      const va = window.BlastTelemetry.verdict(after);
+      const parts = del + add === 0 ? [[null, "Plan matches the safe plan"]] : [
+        ["del", `-${del} lines`], ["add", `+${add} lines`],
+        [null, `score ${analysis ? analysis.score : 0} to ${after.score}`],
+        [null, `${vb.label} to ${va.label}`]
+      ];
+      for (const [cls, text] of parts) stats.appendChild(el("span", cls, text));
+    }
+    if (view) {
+      clear(view);
+      for (const o of ops) {
+        const row = el("div", "diff-line " + o.op);
+        row.setAttribute("role", "row");
+        row.appendChild(el("span", "ln", o.a == null ? "" : o.a));
+        row.appendChild(el("span", "ln", o.b == null ? "" : o.b));
+        row.appendChild(el("span", "mk", o.op === "del" ? "-" : o.op === "add" ? "+" : " "));
+        row.appendChild(el("span", "tx", o.text === "" ? " " : o.text));
+        view.appendChild(row);
       }
     }
-    if (safe) safe.textContent = currentScenario.safeRemediation;
   }
 
-  // ── Deterministic diagnostics ────────────────────────────────────
+  // ---- Deterministic diagnostics -----------------------------------------
   function renderDiagnostics() {
     const grid = $("#diag-grid");
     const sigEl = $("#diag-signature");
@@ -404,42 +614,38 @@
       { label: "Affected resources", value: String(breakdown.affectedCount), cls: "" },
       { label: "Raw weighted score", value: String(breakdown.rawScore), cls: "" },
       { label: "Scanner errors", value: String(coverage.errorFindings), cls: coverage.errorFindings ? "is-block" : "is-safe" },
-      { label: "Modeled peak p95", value: `${sim.summary.peakP95} ms`, cls: "" }
+      { label: "Modeled peak p95", value: `${Math.round(sim.summary.peakP95)} ms`, cls: "" }
     ];
-
     if (grid) {
       grid.innerHTML = cells.map(c => `
         <div class="diag-cell ${c.cls}">
           <span class="diag-label">${escapeHtml(c.label)}</span>
           <span class="diag-value">${escapeHtml(String(c.value))}</span>
-        </div>
-      `).join("");
+        </div>`).join("");
     }
   }
 
   function renderDryRunStats(sim) {
-    const el = $("#dryrun-stats");
-    if (!el) return;
+    const box = $("#dryrun-stats");
+    if (!box) return;
     const s = sim.summary;
-    el.innerHTML = [
-      `<span>peak <b>${s.peakP95} ms</b></span>`,
-      `<span>settled <b>${s.settledP95} ms</b></span>`,
-      `<span>safe path <b>${s.safeSettledP95} ms</b></span>`,
-      `<span>recovery ratio <b>${s.recoveryRatio}</b></span>`,
-      `<span>latency saved <b>${s.latencySavedMs} ms</b></span>`,
-      `<span>seed <b>${sim.seed}</b></span>`,
-      `<span>deterministic model</span>`
+    const r = v => Math.round(v);
+    box.innerHTML = [
+      `<span>peak <b>${r(s.peakP95)} ms</b></span>`,
+      `<span>settled <b>${r(s.settledP95)} ms</b></span>`,
+      `<span>safe path <b>${r(s.safeSettledP95)} ms</b></span>`,
+      `<span>recovery ratio <b>${escapeHtml(String(s.recoveryRatio))}</b></span>`,
+      `<span>latency saved <b>${r(s.latencySavedMs)} ms</b></span>`,
+      `<span>seed <b>${escapeHtml(String(sim.seed))}</b></span>`
     ].join("");
   }
 
-  // ── Dry-run chart (canvas) ────────────────────────────────────────
+  // ---- Dry-run chart (canvas) --------------------------------------------
   function startDryRunAnimation() {
     const canvas = $("#dryRunCanvas");
     if (!canvas) return;
     const ctx = canvas.getContext("2d");
     if (!ctx) return;
-
-    // Cancel previous
     if (dryRunRaf) cancelAnimationFrame(dryRunRaf);
 
     // Reproducible modeled curves from the real policy analysis. The telemetry
@@ -450,24 +656,22 @@
       scenarioId: currentScenario ? currentScenario.id : "default"
     });
     const N = sim.points;
-    const t = sim.t;
     const gateIdx = sim.gateIndex;
     const p95 = sim.p95;
     const errorRate = sim.errorRate;
     const safePath = sim.safePath;
     renderDryRunStats(sim);
 
-    // Animate progressive reveal
-    let progress = 0;
-    const duration = 1400; // ms
+    const reduce = window.matchMedia && window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+    const duration = reduce ? 1 : 1200;
     let startTime = null;
+    const MONO = 'ui-monospace, "SF Mono", Menlo, Consolas, monospace';
 
     function draw(now) {
       if (startTime === null) startTime = now;
-      progress = Math.min(1, (now - startTime) / duration);
-      const visible = Math.floor(progress * N);
+      const progress = Math.min(1, (now - startTime) / duration);
+      const visible = Math.max(2, Math.floor(progress * N));
 
-      // Hi-DPI
       const dpr = window.devicePixelRatio || 1;
       const rect = canvas.getBoundingClientRect();
       const W = Math.max(1, Math.round(rect.width * dpr));
@@ -475,155 +679,141 @@
       canvas.width = W;
       canvas.height = H;
 
-      const padL = 36 * dpr, padR = 12 * dpr, padT = 10 * dpr, padB = 20 * dpr;
+      const padL = 46 * dpr, padR = 10 * dpr, padT = 12 * dpr, padB = 14 * dpr;
       const plotW = W - padL - padR;
       const plotH = H - padT - padB;
-
-      // Clear
       ctx.clearRect(0, 0, W, H);
 
-      // Compute scales
       const p95Max = Math.max(...p95, 1200);
       const errMax = Math.max(...errorRate, 5);
+      const xOf = i => padL + (i / (N - 1)) * plotW;
+      const yLatency = v => padT + plotH - (v / p95Max) * plotH;
+      const yError = v => padT + plotH - (v / errMax) * plotH;
 
-      function xOf(i) { return padL + (i / (N - 1)) * plotW; }
-      function yLatency(v) { return padT + plotH - (v / p95Max) * plotH; }
-      function yError(v) { return padT + plotH - (v / errMax) * plotH; }
-
-      // Grid
       ctx.strokeStyle = "rgba(255,255,255,.06)";
-      ctx.lineWidth = 1 * dpr;
+      ctx.lineWidth = dpr;
       for (let yi = 0; yi <= 3; yi++) {
         const y = padT + (yi / 3) * plotH;
         ctx.beginPath(); ctx.moveTo(padL, y); ctx.lineTo(W - padR, y); ctx.stroke();
       }
 
-      // Gate vertical line
       const gx = xOf(gateIdx);
       if (visible > gateIdx) {
         ctx.save();
-        ctx.strokeStyle = "rgba(245,158,11,.9)";
+        ctx.fillStyle = "rgba(74,222,128,.06)";
+        ctx.fillRect(gx, padT, xOf(Math.min(visible, N) - 1) - gx, plotH);
+        ctx.strokeStyle = "rgba(251,191,36,.9)";
         ctx.setLineDash([4 * dpr, 4 * dpr]);
         ctx.lineWidth = 1.2 * dpr;
         ctx.beginPath(); ctx.moveTo(gx, padT); ctx.lineTo(gx, padT + plotH); ctx.stroke();
         ctx.restore();
-        // Label
-        ctx.fillStyle = "#F59E0B";
-        ctx.font = `${9 * dpr}px JetBrains Mono, monospace`;
-        ctx.fillText("GATE", gx + 4 * dpr, padT + 10 * dpr);
+        ctx.fillStyle = "#fbbf24";
+        ctx.font = `600 ${10 * dpr}px ${MONO}`;
+        ctx.textAlign = "left";
+        ctx.fillText("GATE", gx + 5 * dpr, padT + 10 * dpr);
       }
 
-      // Helper to draw line
-      function drawLine(data, yFn, color, width, alpha) {
-        if (visible < 2) return;
+      function drawLine(data, yFn, color, width, from, dash) {
         ctx.save();
         ctx.strokeStyle = color;
-        ctx.globalAlpha = alpha;
         ctx.lineWidth = width * dpr;
         ctx.lineJoin = "round";
         ctx.lineCap = "round";
+        if (dash) ctx.setLineDash(dash.map(d => d * dpr));
         ctx.beginPath();
-        for (let i = 0; i < visible; i++) {
+        for (let i = from; i < visible; i++) {
           const x = xOf(i), y = yFn(data[i]);
-          if (i === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
+          if (i === from) ctx.moveTo(x, y); else ctx.lineTo(x, y);
         }
         ctx.stroke();
         ctx.restore();
       }
+      drawLine(errorRate, yError, "#f87171", 1.4, 0);
+      drawLine(p95, yLatency, "#60a5fa", 2, 0);
+      if (visible > gateIdx) drawLine(safePath, yLatency, "#4ade80", 2, gateIdx, [5, 4]);
 
-      // Draw lines: p95 (blue), error (red, secondary axis), safe (green dashed after gate)
-      drawLine(p95, yLatency, "#3B82F6", 1.6, 1);
-      drawLine(errorRate, yError, "#EF4444", 1.2, 0.95);
-
-      // Safe path (only after gate, dashed green)
-      if (visible > gateIdx) {
-        ctx.save();
-        ctx.strokeStyle = "#10B981";
-        ctx.lineWidth = 1.4 * dpr;
-        ctx.setLineDash([5 * dpr, 4 * dpr]);
-        ctx.beginPath();
-        for (let i = gateIdx; i < visible; i++) {
-          const x = xOf(i), y = yLatency(safePath[i]);
-          if (i === gateIdx) ctx.moveTo(x, y); else ctx.lineTo(x, y);
-        }
-        ctx.stroke();
-        ctx.restore();
-      }
-
-      // Y-axis labels (latency)
-      ctx.fillStyle = "#7A869E";
-      ctx.font = `${9 * dpr}px JetBrains Mono, monospace`;
+      ctx.fillStyle = "#8b9ab0";
+      ctx.font = `${10 * dpr}px ${MONO}`;
       ctx.textAlign = "right";
-      ctx.fillText(`${Math.round(p95Max)}ms`, padL - 6 * dpr, padT + 8 * dpr);
-      ctx.fillText("0ms", padL - 6 * dpr, padT + plotH);
+      ctx.fillText(`${Math.round(p95Max)} ms`, padL - 6 * dpr, padT + 8 * dpr);
+      ctx.fillText("0 ms", padL - 6 * dpr, padT + plotH);
 
-      if (progress < 1) {
-        dryRunRaf = requestAnimationFrame(draw);
-      }
+      if (progress < 1) dryRunRaf = requestAnimationFrame(draw);
     }
-
     dryRunRaf = requestAnimationFrame(draw);
   }
 
-  // ── Header sync ────────────────────────────────────────────────────
+  // ---- Header ------------------------------------------------------------
   function syncHeader() {
+    if (!analysis) return;
+    const v = currentVerdict();
     const gateEl = $("#hdrGateStatus");
     const scoreEl = $("#hdrBlastScore");
-    if (!analysis) return;
     if (gateEl) {
-      if (analysis.clean) {
-        gateEl.textContent = "✓ PASS";
-        gateEl.style.color = "#10B981";
-      } else if (analysis.score >= 35) {
-        gateEl.textContent = "⛔ BLOCKED";
-        gateEl.style.color = "#EF4444";
-      } else {
-        gateEl.textContent = "⚠ REVIEW";
-        gateEl.style.color = "#F59E0B";
-      }
+      gateEl.textContent = v.label;
+      gateEl.className = "hdr-stat-value is-" + v.key;
     }
     if (scoreEl) {
       scoreEl.textContent = `${analysis.score}/100`;
-      scoreEl.style.color = analysis.score >= 70 ? "#EF4444" : analysis.score >= 35 ? "#F59E0B" : analysis.score < 12 ? "#10B981" : "#EAB308";
+      scoreEl.className = "hdr-stat-value is-" + v.key;
     }
   }
 
-  // ── Injection helpers ─────────────────────────────────────────────
+  // ---- Editor actions ----------------------------------------------------
   function injectSnippet(snippet) {
     const ed = $("#proposalEditor");
     if (!ed) return;
-    const start = ed.selectionStart ?? ed.value.length;
-    const end = ed.selectionEnd ?? ed.value.length;
-    ed.value = ed.value.slice(0, start) + snippet + ed.value.slice(end);
-    ed.focus();
-    ed.selectionStart = ed.selectionEnd = start + snippet.length;
-    analyzeAndRender();
-    renderRightDiff();
-    startDryRunAnimation();
-    toast("Injected - gatekeeper re-analyzed live");
+    const at = ed.value.length;
+    const glue = ed.value.endsWith("\n") || ed.value === "" ? "" : "\n";
+    ed.value = ed.value + glue + snippet.replace(/^\n/, "");
+    pickedKey = null;
+    refresh();
+    // Point the inspector at the newest finding on the injected lines.
+    if (analysis) {
+      const firstNewLine = ed.value.slice(0, at + glue.length).split("\n").length;
+      const idx = analysis.findings.findIndex(f => f.line >= firstNewLine);
+      if (idx >= 0) selectFinding(idx, true);
+    }
+    const v = currentVerdict();
+    toast(`Injected. Gate verdict: ${v.label}`, v.key === "allow" ? "success" : "danger");
+  }
+
+  function loadPlan(p) {
+    const ed = $("#proposalEditor");
+    if (!ed) return;
+    ed.value = p.text;
+    ed.scrollTop = 0;
+    pickedKey = null;
+    graphView = "proposed";
+    refresh();
+    const v = currentVerdict();
+    toast(`Loaded plan. Gate verdict: ${v.label}`, v.key === "allow" ? "success" : v.key === "block" ? "danger" : undefined);
   }
 
   function applySafeFix() {
     const ed = $("#proposalEditor");
-    if (!ed || !currentScenario) return;
+    if (!ed || !currentScenario || !hasSafePlan()) return;
     ed.value = currentScenario.safeRemediation;
-    analyzeAndRender();
-    renderRightDiff();
-    startDryRunAnimation();
-    toast("Applied zero-blast-radius remediation - score should drop to safe", "success");
+    ed.scrollTop = 0;
+    pickedKey = null;
+    graphView = "proposed";
+    refresh();
+    const v = currentVerdict();
+    toast(`Safe plan applied. Score ${analysis.score}, verdict ${v.label}`, v.key === "allow" ? "success" : undefined);
   }
 
-  // ── Audit / SARIF exports ─────────────────────────────────────────
+  // ---- Audit / SARIF exports ---------------------------------------------
   function buildAuditPayload() {
     const now = new Date().toISOString();
     const editorText = $("#proposalEditor") ? $("#proposalEditor").value : "";
+    const v = window.BlastTelemetry.verdict(analysis);
     return {
       bundle: "BlastRadius Zero - Unsigned Diagnostic Audit",
-      version: "1.0.0",
+      version: "1.1.0",
       generatedAt: now,
       scenario: currentScenario ? { id: currentScenario.id, title: currentScenario.title, severity: currentScenario.severity } : null,
       gate: {
-        status: analysis ? (analysis.clean ? "PASS" : analysis.score >= 35 ? "BLOCKED" : "REVIEW") : "UNKNOWN",
+        status: v.status,
         blastScore: analysis ? analysis.score : null,
         violations: analysis ? analysis.violations : [],
         affectedResources: analysis ? analysis.affected : [],
@@ -639,6 +829,7 @@
         remediation: f.remediation,
       })) : [],
       policyStates: analysis ? analysis.policyStates : [],
+      containment: analysis && hasSafePlan() ? window.BlastTelemetry.containment(analysis, safeAnalysis) : null,
       diagnostics: window.BlastTelemetry && analysis ? {
         breakdown: window.BlastTelemetry.scoreBreakdown(analysis),
         coverage: window.BlastTelemetry.scannerCoverage(analysis, window.BlastPolicy.RULES),
@@ -648,7 +839,11 @@
         }).summary
       } : null,
       telemetryNote: "Modeled curves are deterministic functions of the real policy analysis. They are not production measurements.",
-      proposal: { raw: editorText, blockedPreview: $("#diffBlocked") ? $("#diffBlocked").textContent : "", safeRemediation: currentScenario ? currentScenario.safeRemediation : "" },
+      proposal: {
+        raw: editorText,
+        blockedPreview: analysis && !analysis.clean ? editorText : "",
+        safeRemediation: currentScenario && hasSafePlan() ? currentScenario.safeRemediation : ""
+      },
       signature: { algo: "none", signer: "none", note: "Unsigned diagnostic export. Local SHA-256 receipts are separate and are not signatures." },
     };
   }
@@ -667,27 +862,19 @@
       ruleId: f.rule,
       level: f.severity >= 9 ? "error" : f.severity >= 6 ? "warning" : "note",
       message: { text: f.message },
-      locations: [{ physicalLocation: { artifactLocation: { uri: "proposal://remediation-plan" }, region: { startLine: f.line } } }],
+      locations: [{ physicalLocation: { artifactLocation: { uri: "proposal://remediation-plan" }, region: { startLine: Math.max(1, f.line) } } }],
       properties: { policy: f.policy, snippet: f.snippet, remediation: f.remediation },
     })) : [];
-
     return {
       $schema: "https://json.schemastore.org/sarif-2.1.0.json",
       version: "2.1.0",
       runs: [{
-        tool: {
-          driver: {
-            name: "BlastRadius Zero Gatekeeper",
-            version: "1.0.0",
-            informationUri: "https://blastradius.zero",
-            rules,
-          }
-        },
+        tool: { driver: { name: "BlastRadius Zero Gatekeeper", version: "1.1.0", rules } },
         invocations: [{ executionSuccessful: true, endTimeUtc: now }],
         results,
         properties: {
           blastScore: analysis ? analysis.score : 0,
-          gateStatus: analysis ? (analysis.clean ? "PASS" : "BLOCKED") : "UNKNOWN",
+          gateStatus: window.BlastTelemetry.verdict(analysis).status,
           scenario: currentScenario ? currentScenario.id : null,
         }
       }]
@@ -696,14 +883,15 @@
 
   function buildMarkdown() {
     const payload = buildAuditPayload();
+    const cell = s => String(s).replace(/\|/g, "\\|").replace(/\n/g, " ");
     const findingsMd = payload.findings.length
-      ? payload.findings.map(f => `| \`${f.rule}\` | ${f.policy} | ${f.severity} | ${f.message} | L${f.line} | ${f.remediation} |`).join("\n")
-      : "_No findings - all policies pass._";
-
+      ? payload.findings.map(f => `| \`${cell(f.rule)}\` | ${f.policy} | ${f.severity} | ${cell(f.message)} | L${f.line} | ${cell(f.remediation)} |`).join("\n")
+      : "_No findings. All policies pass._";
+    const sc = payload.scenario || { title: "none", id: "none", severity: "" };
     return `# BlastRadius Zero - Audit Report
 
 **Generated:** ${payload.generatedAt}
-**Scenario:** ${payload.scenario.title} (${payload.scenario.id}) - ${payload.scenario.severity}
+**Scenario:** ${sc.title} (${sc.id}) - ${sc.severity}
 **Gate:** **${payload.gate.status}** · Blast Score **${payload.gate.blastScore}/100**
 **Violations:** ${payload.gate.violations.length ? payload.gate.violations.join(", ") : "none"}
 **Affected Resources:** ${payload.gate.affectedResources.length ? payload.gate.affectedResources.join(", ") : "none"}
@@ -720,13 +908,13 @@ ${payload.policyStates.map(p => `| ${p.id} - ${p.name} | ${p.status.toUpperCase(
 |------|--------|-----|---------|------|-------------|
 ${findingsMd}
 
-## Blocked Proposal (raw)
+## Proposed Plan (raw)
 
 \`\`\`
 ${payload.proposal.raw}
 \`\`\`
 
-## Synthesized Safe Remediation
+## Safe Plan
 
 \`\`\`
 ${payload.proposal.safeRemediation}
@@ -753,28 +941,26 @@ ${payload.proposal.safeRemediation}
     document.body.appendChild(a);
     a.click();
     a.remove();
-    // Revoke after tick
     setTimeout(() => URL.revokeObjectURL(url), 1200);
     toast(`Downloaded ${filename}`, "success");
   }
 
-  // ── Toast ──────────────────────────────────────────────────────────
+  // ---- Toast + modal -----------------------------------------------------
   function toast(msg, variant) {
     const stack = $("#toastStack");
     if (!stack) return;
-    const t = document.createElement("div");
-    t.className = "toast" + (variant ? " " + variant : "");
-    t.textContent = msg;
+    while (stack.children.length >= 2) stack.removeChild(stack.firstChild);
+    const t = el("div", "toast" + (variant ? " " + variant : ""), msg);
     stack.appendChild(t);
     setTimeout(() => {
       t.style.opacity = "0";
       t.style.transform = "translateY(6px)";
       t.style.transition = ".22s";
       setTimeout(() => t.remove(), 240);
-    }, 2600);
+    }, 2200);
   }
 
-  // ── Modal ──────────────────────────────────────────────────────────
+  let modalReturnFocus = null;
   function openModal(title, content) {
     const backdrop = $("#auditModal");
     const pre = $("#modalPre");
@@ -782,84 +968,83 @@ ${payload.proposal.safeRemediation}
     if (!backdrop || !pre) return;
     if (titleEl) titleEl.textContent = title;
     pre.textContent = content;
+    modalReturnFocus = document.activeElement;
     backdrop.classList.add("open");
+    const close = $("#btnCloseModal");
+    if (close) close.focus();
   }
   function closeModal() {
     const b = $("#auditModal");
-    if (b) b.classList.remove("open");
+    if (!b || !b.classList.contains("open")) return;
+    b.classList.remove("open");
+    if (modalReturnFocus && typeof modalReturnFocus.focus === "function") modalReturnFocus.focus();
   }
 
-  // ── Utils ──────────────────────────────────────────────────────────
+  // ---- Utils -------------------------------------------------------------
   function escapeHtml(s) {
     return String(s)
       .replace(/&/g, "&amp;").replace(/</g, "&lt;")
-      .replace(/>/g, "&gt;").replace(/"/g, "&quot;");
+      .replace(/>/g, "&gt;").replace(/"/g, "&quot;").replace(/'/g, "&#39;");
+  }
+  function truncate(s, n) {
+    s = String(s);
+    return s.length > n ? s.slice(0, n - 1) + "…" : s;
   }
   function avatarColor(a) {
     const m = { TA: "#3B82F6", IP: "#8B5CF6", RS: "#10B981" };
     return m[a] || "#6B7280";
   }
 
-  // ── Wire events ────────────────────────────────────────────────────
+  // ---- Wire events -------------------------------------------------------
   function wireEvents() {
-    // Editor live analysis (debounced)
     const ed = $("#proposalEditor");
     if (ed) {
       let timer = null;
       ed.addEventListener("input", () => {
+        renderGutter();
         clearTimeout(timer);
-        timer = setTimeout(() => {
-          analyzeAndRender();
-          renderRightDiff();
-          startDryRunAnimation();
-        }, 120);
+        timer = setTimeout(refresh, 120);
       });
+      ed.addEventListener("scroll", renderGutterScroll);
     }
 
-    // Apply safe remediation directly from the editor toolbar.
     const btnSafe = $("#btnSafeFix");
     if (btnSafe) btnSafe.addEventListener("click", applySafeFix);
 
-    // Reset proposal
     const btnReset = $("#btnResetProposal");
     if (btnReset) btnReset.addEventListener("click", () => {
       if (!currentScenario) return;
       const ed2 = $("#proposalEditor");
-      if (ed2) ed2.value = currentScenario.rawPlan;
-      analyzeAndRender();
-      renderRightDiff();
-      startDryRunAnimation();
-      toast("Proposal reset to scenario default");
+      if (ed2) { ed2.value = currentScenario.rawPlan; ed2.scrollTop = 0; }
+      pickedKey = null;
+      refresh();
+      toast("Plan reset to the scenario's original proposal");
     });
 
-    // Copy proposal
     const btnCopy = $("#btnCopyProposal");
     if (btnCopy) btnCopy.addEventListener("click", async () => {
       const ed2 = $("#proposalEditor");
       if (!ed2) return;
       try {
         await navigator.clipboard.writeText(ed2.value);
-        toast("Copied proposal to clipboard", "success");
-      } catch {
+        toast("Copied the plan", "success");
+      } catch (_) {
         ed2.select(); document.execCommand("copy");
-        toast("Copied proposal", "success");
+        toast("Copied the plan", "success");
       }
     });
 
-    // Copy safe
     const btnCopyDiff = $("#btnCopyDiff");
     if (btnCopyDiff) btnCopyDiff.addEventListener("click", async () => {
-      const safe = $("#diffSafe");
-      if (!safe) return;
+      if (!currentScenario || !hasSafePlan()) return;
       try {
-        await navigator.clipboard.writeText(safe.textContent);
-        toast("Copied safe remediation", "success");
-      } catch {
-        toast("Copy failed - select and copy manually");
+        await navigator.clipboard.writeText(currentScenario.safeRemediation);
+        toast("Copied the safe plan", "success");
+      } catch (_) {
+        toast("Copy blocked by the browser. Select the green lines and copy them.");
       }
     });
 
-    // Inject buttons
     const injectMap = {
       btnInjectRm: "\nrm -rf /\n",
       btnInjectDrop: "\nDROP TABLE users;\n",
@@ -871,92 +1056,78 @@ ${payload.proposal.safeRemediation}
       if (btn) btn.addEventListener("click", () => injectSnippet(snippet));
     }
 
-    // Header dry-run
     const btnDry = $("#btnDryRun");
-    if (btnDry) btnDry.addEventListener("click", () => {
-      startDryRunAnimation();
-      toast("Dry-run replayed");
-    });
+    if (btnDry) btnDry.addEventListener("click", () => { startDryRunAnimation(); toast("Dry-run replayed with the same seed"); });
     const btnReplay = $("#btnReplayDryRun");
-    if (btnReplay) btnReplay.addEventListener("click", () => {
-      startDryRunAnimation();
-      toast("Dry-run replayed");
-    });
+    if (btnReplay) btnReplay.addEventListener("click", () => { startDryRunAnimation(); toast("Dry-run replayed with the same seed"); });
 
-    // Composer button
     const btnComp = $("#btnComposer");
     if (btnComp) btnComp.addEventListener("click", () => selectScenario("custom"));
 
+    const gp = $("#graphProposed");
+    if (gp) gp.addEventListener("click", () => setGraphView("proposed"));
+    const gc = $("#graphContained");
+    if (gc) gc.addEventListener("click", () => setGraphView("contained"));
+
     wireManifestPresets();
 
-    // Exports
     const btnJson = $("#btnExportJson");
     if (btnJson) btnJson.addEventListener("click", () => {
-      const payload = buildAuditPayload();
-      downloadFile(`blastradius-audit-${currentId || "unknown"}-${Date.now()}.json`, JSON.stringify(payload, null, 2), "application/json");
+      downloadFile(`blastradius-audit-${currentId || "unknown"}-${Date.now()}.json`, JSON.stringify(buildAuditPayload(), null, 2), "application/json");
     });
-
     const btnMd = $("#btnExportMd");
     if (btnMd) btnMd.addEventListener("click", () => {
       downloadFile(`blastradius-audit-${currentId || "unknown"}-${Date.now()}.md`, buildMarkdown(), "text/markdown");
     });
-
     const btnSarif = $("#btnExportSarif");
     if (btnSarif) btnSarif.addEventListener("click", () => {
       downloadFile(`blastradius-${currentId || "unknown"}-${Date.now()}.sarif.json`, JSON.stringify(buildSarif(), null, 2), "application/json");
     });
-
     const btnExport = $("#btnExport");
     if (btnExport) btnExport.addEventListener("click", () => {
-      // Combined: download JSON + show preview
       const payload = buildAuditPayload();
       const sarif = buildSarif();
-      // Offer JSON
       downloadFile(`blastradius-audit-${currentId || "unknown"}-${Date.now()}.json`, JSON.stringify(payload, null, 2), "application/json");
       setTimeout(() => {
         downloadFile(`blastradius-${currentId || "unknown"}-${Date.now()}.sarif.json`, JSON.stringify(sarif, null, 2), "application/json");
       }, 350);
-      openModal("Audit Bundle - JSON Preview (also downloading SARIF)", JSON.stringify(payload, null, 2));
+      openModal("Audit bundle: JSON preview (SARIF also downloading)", JSON.stringify(payload, null, 2));
     });
 
     const btnPreview = $("#btnPreviewAudit");
     const previewEl = $("#auditPreview");
     if (btnPreview && previewEl) {
       btnPreview.addEventListener("click", () => {
-        const isHidden = previewEl.style.display === "none";
-        if (isHidden) {
-          previewEl.textContent = buildMarkdown();
-          previewEl.style.display = "block";
-          btnPreview.textContent = "✕ Hide Preview";
-        } else {
-          previewEl.style.display = "none";
-          btnPreview.textContent = "👁 Preview";
-        }
+        const show = previewEl.hidden;
+        if (show) previewEl.textContent = buildMarkdown();
+        previewEl.hidden = !show;
+        btnPreview.setAttribute("aria-expanded", show ? "true" : "false");
       });
     }
 
-    // Modal close
     const btnClose = $("#btnCloseModal");
     if (btnClose) btnClose.addEventListener("click", closeModal);
     const backdrop = $("#auditModal");
-    if (backdrop) {
-      backdrop.addEventListener("click", (e) => {
-        if (e.target === backdrop) closeModal();
-      });
-    }
-    document.addEventListener("keydown", (e) => {
-      if (e.key === "Escape") closeModal();
-    });
+    if (backdrop) backdrop.addEventListener("click", e => { if (e.target === backdrop) closeModal(); });
+    document.addEventListener("keydown", e => { if (e.key === "Escape") closeModal(); });
 
-    // Resize → redraw chart
     let resizeTimer = null;
     window.addEventListener("resize", () => {
       clearTimeout(resizeTimer);
-      resizeTimer = setTimeout(() => startDryRunAnimation(), 160);
+      resizeTimer = setTimeout(() => { renderTopology(); startDryRunAnimation(); }, 160);
     });
   }
 
-  // ── Structured manifest quick presets ─────────────────────────────
+  // ---- Typed action gate presets -----------------------------------------
+  function renderManifestVerdict(decision) {
+    const box = $("#manifest-verdict");
+    if (!box) return;
+    clear(box);
+    box.appendChild(el("span", "mv-badge " + (decision.allowed ? "allow" : "deny"), decision.allowed ? "ALLOW" : "DENY"));
+    if (decision.allowed) box.appendChild(el("span", null, "Within the typed policy. Still not executed here."));
+    else for (const r of decision.rules) box.appendChild(el("span", "mv-rule", r));
+  }
+
   function wireManifestPresets() {
     const holder = $("#manifest-presets");
     const input = $("#manifest-input");
@@ -970,27 +1141,40 @@ ${payload.proposal.safeRemediation}
       { label: "Network denied", value: { version: 1, kind: "network", parameters: { host: "example.invalid", method: "GET", data_class: "public" } } },
       { label: "Path escape denied", value: { version: 1, kind: "read", parameters: { path: "/workspace/../private" } } }
     ];
-    holder.innerHTML = "";
+    clear(holder);
     for (const p of presets) {
-      const btn = document.createElement("button");
+      const btn = el("button");
       btn.type = "button";
-      btn.textContent = p.label;
+      btn.setAttribute("aria-pressed", "false");
       const text = JSON.stringify(p.value, null, 2);
       const decision = gate.decide(p.value);
       btn.title = decision.allowed ? "Permitted by the offline gate" : "Denied: " + decision.rules.join(", ");
       if (!decision.allowed) btn.classList.add("is-denied");
+      btn.appendChild(el("span", "mp-name", p.label));
+      btn.appendChild(el("span", "mp-out " + (decision.allowed ? "allow" : "deny"), decision.allowed ? "ALLOW" : "DENY " + decision.rules.join(", ")));
       btn.addEventListener("click", () => {
         input.value = text;
         if (output) output.textContent = JSON.stringify(decision, null, 2);
-        toast(p.label + (decision.allowed ? " permitted" : " denied: " + decision.rules.join(", ")));
+        renderManifestVerdict(decision);
+        $$("#manifest-presets button").forEach(b => b.setAttribute("aria-pressed", b === btn ? "true" : "false"));
+        toast(p.label + (decision.allowed ? ": permitted" : ": denied by " + decision.rules.join(", ")));
       });
       holder.appendChild(btn);
     }
+    const check = $("#manifest-check");
+    if (check) check.addEventListener("click", () => {
+      let decision;
+      try { decision = gate.decide(JSON.parse(input.value)); }
+      catch (_) { decision = { allowed: false, rules: ["SCHEMA"] }; }
+      renderManifestVerdict(decision);
+      $$("#manifest-presets button").forEach(b => b.setAttribute("aria-pressed", "false"));
+    });
   }
 
-  // ── Boot ───────────────────────────────────────────────────────────
+  // ---- Boot --------------------------------------------------------------
   function boot() {
     renderScenarioSwitcher();
+    renderLoadPlans();
     selectScenario("gpu-loop");
     wireEvents();
   }

@@ -5,220 +5,262 @@
 <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'none'; object-src 'none'; base-uri 'none'; form-action 'none'">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <meta name="color-scheme" content="dark">
-<title>BlastRadius Zero - Offline Policy Gate and Incident Simulator</title>
-<meta name="description" content="Local agent policy studio with heuristic text diagnostics, a default-deny structured action gate, deterministic scoring, and simulated cloud incident plans.">
+<title>BlastRadius Zero - Agent Blast-Radius Firewall</title>
+<meta name="description" content="An offline policy gate for agent-proposed infrastructure changes: a live verdict, the exact rule that fired, a blast-radius map, a containment diff and a default-deny typed action gate.">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='8' fill='%230f141c'/%3E%3Ccircle cx='16' cy='16' r='10' fill='none' stroke='%23f87171' stroke-width='2' stroke-dasharray='4 3'/%3E%3Ccircle cx='16' cy='16' r='5.5' fill='none' stroke='%2360a5fa' stroke-width='2'/%3E%3Ccircle cx='16' cy='16' r='2' fill='%23e6edf6'/%3E%3C/svg%3E">
 <link rel="stylesheet" href="styles.css">
 </head>
 <body>
 
-<!-- ═══════════════════ HEADER ═══════════════════ -->
-<header class="app-header">
-  <div class="header-left">
-    <div class="logo-mark">◈</div>
-    <div class="header-title">
-      <h1><span>BLASTRADIUS</span> <em>ZERO</em> <span class="badge-live">● LIVE GATEKEEPER</span></h1>
-      <p>Offline policy diagnostics with illustrative incident metrics, logs and plans. No agent, cloud workload or remediation command is executed.</p>
+<header class="topbar">
+  <div class="brand">
+    <svg class="brand-mark" viewBox="0 0 32 32" aria-hidden="true">
+      <circle cx="16" cy="16" r="12.5" fill="none" stroke="currentColor" stroke-width="1.6" stroke-dasharray="4 3" class="ring-outer"/>
+      <circle cx="16" cy="16" r="7" fill="none" stroke="currentColor" stroke-width="1.8" class="ring-inner"/>
+      <circle cx="16" cy="16" r="2.4" fill="currentColor"/>
+    </svg>
+    <h1>BlastRadius <span>Zero</span></h1>
+  </div>
+  <div class="topbar-status" aria-live="polite">
+    <div class="hdr-stat">
+      <span class="hdr-stat-label">Gate</span>
+      <span class="hdr-stat-value" id="hdrGateStatus">-</span>
+    </div>
+    <div class="hdr-stat">
+      <span class="hdr-stat-label">Blast score</span>
+      <span class="hdr-stat-value" id="hdrBlastScore">-</span>
     </div>
   </div>
-  <div class="header-right">
-    <div class="hdr-stat">
-      <span class="hdr-stat-label">Gate Status</span>
-      <span class="hdr-stat-value" id="hdrGateStatus"> - </span>
-    </div>
-    <div class="hdr-stat">
-      <span class="hdr-stat-label">Blast Score</span>
-      <span class="hdr-stat-value" id="hdrBlastScore"> - </span>
-    </div>
-    <button class="btn-ghost" id="btnDryRun">▶ Run Dry-Run</button>
-    <button class="btn-primary" id="btnExport">⤓ Export Audit Bundle</button>
+  <div class="topbar-actions">
+    <button type="button" class="btn btn-ghost" id="btnDryRun">
+      <svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><path d="M8 5l11 7-11 7V5z"/></svg>
+      Replay dry-run
+    </button>
+    <button type="button" class="btn btn-primary" id="btnExport">
+      <svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 4v11m0 0l-4-4m4 4l4-4M5 20h14"/></svg>
+      Export audit bundle
+    </button>
   </div>
 </header>
 
-<!-- ═══════════════════ SCENARIO SWITCHER ═══════════════════ -->
-<div class="scenario-bar">
-  <div class="scenario-bar-head">
-    <h2>▸ Scenario Switcher <b> -  4 Incidents + Custom Composer</b></h2>
-    <div class="composer-actions">
-      <button class="btn-ghost btn-sm" id="btnComposer">✦ Custom Incident Composer</button>
-    </div>
-  </div>
-  <div class="scenario-grid" id="scenarioGrid"></div>
-</div>
-
-<!-- ═══════════════════ 3-COLUMN STUDIO ═══════════════════ -->
 <main class="studio">
 
-  <!-- ── LEFT: Incident Telemetry & Swarm Proposal ── -->
-  <section class="panel" id="panelLeft">
-    <div class="panel-header">
-      <h2><span class="panel-num" style="background:#3B82F6">1</span> Illustrative Incident Telemetry &amp; Scenario Plans</h2>
-      <span class="panel-subtitle" id="leftSubtitle"></span>
-    </div>
-    <div class="panel-body">
-      <!-- Metrics -->
-      <div class="metrics-grid" id="metricsGrid"></div>
-
-      <!-- Log stream -->
-      <div class="log-stream">
-        <div class="log-stream-head">
-          <span>◉ Simulated Incident Log Stream</span>
-          <span class="live-dot" title="simulated playback"></span>
-        </div>
-        <div class="log-lines" id="logLines"></div>
-      </div>
-
-      <!-- Agent proposals -->
-      <div class="agent-list" id="agentList"></div>
-
-      <!-- Editable proposal -->
-      <div class="editor-wrap">
-        <div class="editor-head">
-          <span>✎ Proposed Remediation Plan - Editable (gatekeeper reacts live)</span>
-          <div class="editor-actions">
-            <button class="btn-ghost btn-sm" id="btnResetProposal">↺ Reset</button>
-            <button class="btn-ghost btn-sm" id="btnCopyProposal">⧉ Copy</button>
-            <button class="btn-ghost btn-sm" id="btnSafeFix">✓ Apply Safe Fix</button>
-          </div>
-        </div>
-        <textarea class="proposal-editor" id="proposalEditor" spellcheck="false" placeholder="Edit the agent-proposed commands here - the gatekeeper analyzes on every keystroke."></textarea>
-        <div class="editor-hint">
-          <b>Try injecting:</b> destructive commands to test the gatekeeper live. Edits are analyzed deterministically - no network calls.
-          <div class="inject-row" id="injectRow"></div>
+  <!-- Verdict console: the answer first, then the controls that change it -->
+  <section class="console" id="verdictConsole" data-verdict="block" aria-labelledby="verdictWord">
+    <div class="verdict">
+      <div class="score-ring" id="scoreRing">
+        <svg viewBox="0 0 84 84" aria-hidden="true">
+          <circle class="score-ring-bg" cx="42" cy="42" r="32"></circle>
+          <circle class="score-ring-fg" id="scoreRingFg" cx="42" cy="42" r="32" stroke-dasharray="201" stroke-dashoffset="201"></circle>
+        </svg>
+        <div class="score-ring-center">
+          <span class="score-num" id="scoreNum">-</span>
+          <span class="score-unit">of 100</span>
         </div>
       </div>
+      <div class="verdict-body">
+        <h2 class="verdict-word" id="verdictWord">Analyzing</h2>
+        <p class="verdict-reason" id="blastTitle">Scanning the proposed plan.</p>
+        <p class="verdict-facts" id="blastDesc"></p>
+        <div class="verdict-pill" id="verdictPill">Waiting for the first scan</div>
+      </div>
     </div>
-    <div class="panel-footer">
-      <button class="btn-amber btn-sm" id="btnInjectRm">Inject rm -rf /</button>
-      <button class="btn-amber btn-sm" id="btnInjectDrop">Inject DROP TABLE</button>
-      <button class="btn-amber btn-sm" id="btnInjectIam">Inject iam:*</button>
-      <button class="btn-amber btn-sm" id="btnInjectExfil">Inject curl exfil</button>
+
+    <div class="console-controls">
+      <div class="control-group">
+        <span class="control-label" id="lblScenario">Incident</span>
+        <div class="scenario-row">
+          <div class="scenario-grid" id="scenarioGrid" role="group" aria-labelledby="lblScenario"></div>
+          <button type="button" class="scenario-card scenario-custom" id="btnComposer" data-id="custom">
+            <svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg>
+            <span class="sc-title">Write your own</span>
+          </button>
+        </div>
+      </div>
+
+      <div class="control-group">
+        <span class="control-label" id="lblAttack">Inject an attack</span>
+        <div class="chip-row" role="group" aria-labelledby="lblAttack">
+          <button type="button" class="chip chip-attack" id="btnInjectRm"><svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><path d="M13 3L5 14h6l-1 7 8-11h-6l1-7z"/></svg>rm -rf /</button>
+          <button type="button" class="chip chip-attack" id="btnInjectDrop"><svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><path d="M13 3L5 14h6l-1 7 8-11h-6l1-7z"/></svg>DROP TABLE</button>
+          <button type="button" class="chip chip-attack" id="btnInjectIam"><svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><path d="M13 3L5 14h6l-1 7 8-11h-6l1-7z"/></svg>iam:* wildcard</button>
+          <button type="button" class="chip chip-attack" id="btnInjectExfil"><svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><path d="M13 3L5 14h6l-1 7 8-11h-6l1-7z"/></svg>curl secret exfil</button>
+        </div>
+      </div>
+
+      <div class="control-group">
+        <span class="control-label" id="lblLoad">Load a plan</span>
+        <div class="chip-row" id="injectRow" role="group" aria-labelledby="lblLoad"></div>
+      </div>
+
+      <div class="control-group control-contain">
+        <button type="button" class="btn btn-safe" id="btnSafeFix">
+          <svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3l7 3v5c0 4.5-3 8.2-7 10-4-1.8-7-5.5-7-10V6l7-3z"/><path d="M8.5 12l2.5 2.5 4.5-5"/></svg>
+          Contain: apply safe plan
+        </button>
+      </div>
     </div>
   </section>
 
-  <!-- ── CENTER: Blast-Radius Simulator ── -->
-  <section class="panel" id="panelCenter">
-    <div class="panel-header">
-      <h2><span class="panel-num" style="background:#F59E0B">2</span> Policy Diagnostics &amp; Blast-Radius Simulator</h2>
-      <span class="panel-subtitle">Deterministic · Reproducible · Offline</span>
-    </div>
-    <div class="panel-body">
+  <!-- Workbench -->
+  <div class="workbench">
 
-      <!-- Blast score -->
-      <div class="blast-score-row" id="blastScoreRow">
-        <div class="score-ring" id="scoreRing">
-          <svg viewBox="0 0 84 84" aria-hidden="true">
-            <circle class="score-ring-bg" cx="42" cy="42" r="32"></circle>
-            <circle class="score-ring-fg" id="scoreRingFg" cx="42" cy="42" r="32" stroke-dasharray="201" stroke-dashoffset="201"></circle>
-          </svg>
-          <div class="score-ring-center">
-            <div class="score-num" id="scoreNum"> - </div>
-            <div class="score-label">Blast Score</div>
+    <div class="col col-plan">
+      <section class="panel p-plan" aria-labelledby="hPlan">
+        <div class="panel-head">
+          <h2 id="hPlan">Agent plan</h2>
+          <div class="panel-tools">
+            <button type="button" class="btn btn-ghost btn-sm" id="btnResetProposal">
+              <svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 12a8 8 0 1 0 2.3-5.7M4 4v4h4"/></svg>Reset
+            </button>
+            <button type="button" class="btn btn-ghost btn-sm" id="btnCopyProposal">
+              <svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><rect x="8" y="8" width="12" height="12" rx="2"/><path d="M16 8V5a1 1 0 0 0-1-1H5a1 1 0 0 0-1 1v10a1 1 0 0 0 1 1h3"/></svg>Copy
+            </button>
           </div>
         </div>
-        <div class="blast-meta">
-          <h3 id="blastTitle">Analyzing proposal…</h3>
-          <p id="blastDesc">Edit the left-panel proposal to see live scoring.</p>
-          <div class="verdict-pill neutral" id="verdictPill">◉ Awaiting analysis</div>
+        <div class="editor">
+          <div class="editor-gutter" id="editorGutter" aria-hidden="true"></div>
+          <textarea class="proposal-editor" id="proposalEditor" spellcheck="false" wrap="off" aria-label="Agent-proposed remediation plan" placeholder="Paste or type an agent's proposed commands. The gate re-scans on every keystroke."></textarea>
         </div>
-      </div>
+      </section>
 
-      <!-- Policy cards -->
-      <div class="policy-grid" id="policyGrid"></div>
+      <section class="panel p-context" aria-labelledby="hContext">
+        <div class="panel-head">
+          <h2 id="hContext">Incident context</h2>
+          <span class="tag" id="leftSubtitle"></span>
+        </div>
+        <div class="metrics-grid" id="metricsGrid"></div>
+        <div class="log-stream" id="logLines" aria-label="Simulated incident log"></div>
+        <div class="agent-list" id="agentList"></div>
+        <p class="note">Simulated incident. Metrics, logs and agent proposals are illustrative; no agent or cloud workload is running.</p>
+      </section>
+    </div>
 
-      <!-- Topology -->
-      <div class="topo-wrap">
-        <div class="topo-head">
-          <span>⬢ Affected Stateful Resources Graph</span>
-          <div class="topo-legend">
-            <span style="font-size:10px;color:var(--muted)"><i class="legend-dot" style="background:var(--danger)"></i> affected</span>
-            <span style="font-size:10px;color:var(--muted)"><i class="legend-dot" style="background:var(--border2)"></i> safe</span>
+    <div class="col col-map">
+      <section class="panel p-map" aria-labelledby="hMap">
+        <div class="panel-head">
+          <h2 id="hMap">Blast radius</h2>
+          <div class="segmented" role="group" aria-label="Map view">
+            <button type="button" id="graphProposed" aria-pressed="true">Proposed plan</button>
+            <button type="button" id="graphContained" aria-pressed="false">After containment</button>
           </div>
         </div>
         <div class="topo-svg-wrap">
-          <svg class="topo-svg" id="topoSvg" viewBox="0 0 520 270" role="img" aria-label="Infrastructure topology"></svg>
+          <svg class="topo-svg" id="topoSvg" viewBox="0 0 520 260" role="group" aria-label="Infrastructure blast-radius map"></svg>
         </div>
-      </div>
+        <div class="topo-foot">
+          <div class="topo-legend">
+            <span><i class="legend-dot is-hit"></i>In blast radius</span>
+            <span><i class="legend-dot is-contained"></i>Contained</span>
+            <span><i class="legend-dot"></i>Untouched</span>
+          </div>
+          <p class="graph-note" id="graphNote" aria-live="polite"></p>
+        </div>
+        <div class="policy-grid" id="policyGrid"></div>
+      </section>
 
-      <!-- Findings -->
-      <div class="findings-list" id="findingsList"></div>
-
-      <!-- Deterministic diagnostic strip -->
-      <div class="diag-strip" id="diagStrip" aria-live="polite">
-        <div class="diag-head">
-          <span>◈ Deterministic Scan Diagnostics</span>
+      <section class="panel p-diag diag-strip" id="diagStrip" aria-labelledby="hDiag">
+        <div class="panel-head">
+          <h2 id="hDiag">Scan diagnostics</h2>
           <span class="diag-sig" id="diag-signature">analysis fingerprint 0</span>
         </div>
-        <div class="diag-grid" id="diag-grid"></div>
-        <p class="diag-note" id="diag-note">Every value is derived from the actual policy findings and a fixed seed. Nothing here is a production measurement.</p>
-      </div>
-    </div>
-  </section>
+        <div class="diag-grid" id="diag-grid" aria-live="polite"></div>
+        <p class="note" id="diag-note">Every value is derived from the actual policy findings and a fixed seed. Nothing here is a production measurement.</p>
+      </section>
 
-  <!-- ── RIGHT: Shadow Dry-Run & Remediation ── -->
-  <section class="panel" id="panelRight">
-    <div class="panel-header">
-      <h2><span class="panel-num" style="background:#10B981">3</span> Shadow Dry-Run &amp; Safe Remediation</h2>
-    </div>
-    <div class="panel-body">
-
-      <!-- Diff -->
-      <div class="diff-wrap">
-        <div class="diff-head">
-          <span>◐ Blocked vs Synthesized Remediation</span>
-          <button class="btn-ghost btn-sm" id="btnCopyDiff">⧉ Copy Safe</button>
-        </div>
-        <div class="diff-cols">
-          <div class="diff-col">
-            <div class="diff-col-label block">✕ Blocked Unsafe Action</div>
-            <pre class="diff-code" id="diffBlocked"></pre>
-          </div>
-          <div class="diff-col">
-            <div class="diff-col-label safe">✓ Zero-Blast-Radius Remediation</div>
-            <pre class="diff-code" id="diffSafe"></pre>
-          </div>
-        </div>
-      </div>
-
-      <!-- Dry-run chart -->
-      <div class="dryrun-chart">
-        <div class="dryrun-chart-head">
-          <h4>◉ Modeled Dry-Run - Latency &amp; Error-Rate Recovery</h4>
-          <button class="btn-ghost btn-sm" id="btnReplayDryRun">↺ Replay</button>
+      <section class="panel p-dry" aria-labelledby="hDry">
+        <div class="panel-head">
+          <h2 id="hDry">Modeled dry-run</h2>
+          <button type="button" class="btn btn-ghost btn-sm" id="btnReplayDryRun">
+            <svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 12a8 8 0 1 0 2.3-5.7M4 4v4h4"/></svg>Replay
+          </button>
         </div>
         <div class="chart-wrap">
-          <canvas id="dryRunCanvas" width="600" height="140"></canvas>
+          <canvas id="dryRunCanvas" width="600" height="150" aria-label="Modeled p95 latency and error rate, with the safe path after the gate"></canvas>
         </div>
         <div class="chart-legend">
-          <span class="chart-legend-item"><i class="chart-legend-swatch" style="background:#3B82F6"></i> P95 Latency (ms)</span>
-          <span class="chart-legend-item"><i class="chart-legend-swatch" style="background:#EF4444"></i> Error Rate (%)</span>
-          <span class="chart-legend-item"><i class="chart-legend-swatch" style="background:#10B981"></i> Safe Path Latency</span>
-          <span class="chart-legend-item"><i class="chart-legend-swatch" style="background:#F59E0B"></i> Gate Block Point</span>
+          <span><i class="swatch" style="background:#60a5fa"></i>p95 latency</span>
+          <span><i class="swatch" style="background:#f87171"></i>Error rate</span>
+          <span><i class="swatch swatch-dash" style="background:#4ade80"></i>Safe path</span>
+          <span><i class="swatch" style="background:#fbbf24"></i>Gate</span>
         </div>
         <div class="dryrun-stats" id="dryrun-stats" aria-live="polite"></div>
-      </div>
-
-      <!-- Exports -->
-      <div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:10px">
-        <button class="btn-primary btn-sm" id="btnExportJson">⤓ Diagnostic Audit (JSON)</button>
-        <button class="btn-primary btn-sm" id="btnExportMd">⤓ Audit Report (Markdown)</button>
-        <button class="btn-ghost btn-sm" id="btnExportSarif">⤓ SARIF Bundle</button>
-        <button class="btn-ghost btn-sm" id="btnPreviewAudit">👁 Preview</button>
-      </div>
-      <div class="audit-preview" id="auditPreview" style="display:none"></div>
+      </section>
     </div>
-  </section>
 
+    <div class="col col-inspect">
+      <section class="panel p-inspect" aria-labelledby="hInspector">
+        <div class="panel-head">
+          <h2 id="hInspector">Rule inspector</h2>
+          <span class="tag" id="ruleCount"></span>
+        </div>
+        <div class="findings-list" id="findingsList" role="listbox" aria-label="Fired rules"></div>
+        <div class="rule-detail" id="ruleDetail" aria-live="polite"></div>
+      </section>
+
+      <section class="panel p-diff" aria-labelledby="hDiff">
+        <div class="panel-head">
+          <h2 id="hDiff">Containment diff</h2>
+          <button type="button" class="btn btn-ghost btn-sm" id="btnCopyDiff">
+            <svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><rect x="8" y="8" width="12" height="12" rx="2"/><path d="M16 8V5a1 1 0 0 0-1-1H5a1 1 0 0 0-1 1v10a1 1 0 0 0 1 1h3"/></svg>Copy safe plan
+          </button>
+        </div>
+        <div class="diff-stats" id="diffStats" aria-live="polite"></div>
+        <div class="diff-view" id="diffView" role="table" aria-label="Line diff from the proposed plan to the safe plan"></div>
+      </section>
+
+
+      <section class="panel p-export" aria-labelledby="hExport">
+        <div class="panel-head">
+          <h2 id="hExport">Audit exports</h2>
+        </div>
+        <div class="export-row">
+          <button type="button" class="btn btn-ghost btn-sm" id="btnExportJson"><svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 4v11m0 0l-4-4m4 4l4-4M5 20h14"/></svg>JSON</button>
+          <button type="button" class="btn btn-ghost btn-sm" id="btnExportMd"><svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 4v11m0 0l-4-4m4 4l4-4M5 20h14"/></svg>Markdown</button>
+          <button type="button" class="btn btn-ghost btn-sm" id="btnExportSarif"><svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 4v11m0 0l-4-4m4 4l4-4M5 20h14"/></svg>SARIF</button>
+          <button type="button" class="btn btn-ghost btn-sm" id="btnPreviewAudit" aria-expanded="false" aria-controls="auditPreview"><svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7S2 12 2 12z"/><circle cx="12" cy="12" r="3"/></svg>Preview</button>
+        </div>
+        <pre class="audit-preview" id="auditPreview" hidden></pre>
+      </section>
+    </div>
+  </div>
+
+  <div class="lower">
+    <section class="panel" id="manifestPanel" aria-labelledby="hManifest">
+      <div class="panel-head">
+        <h2 id="hManifest">Typed action gate</h2>
+        <span class="tag">default deny</span>
+      </div>
+      <div class="manifest-presets" id="manifest-presets" role="group" aria-label="Typed action presets"></div>
+      <label class="field-label" for="manifest-input">Action manifest (JSON)</label>
+      <textarea id="manifest-input" class="manifest-input" spellcheck="false">{"version":1,"kind":"test","parameters":{"argv":["python","-m","pytest","-q"],"cwd":"/workspace"}}</textarea>
+      <div class="manifest-actions">
+        <button type="button" id="manifest-check" class="btn btn-primary btn-sm">Decide</button>
+        <div class="manifest-verdict" id="manifest-verdict" aria-live="polite"></div>
+      </div>
+      <pre id="manifest-result" class="code-out" aria-live="polite"></pre>
+      <p class="note">Text scanning explains a plan. This boundary decides one typed action at a time: unknown kinds, extra keys and all network egress are denied. Nothing is executed.</p>
+    </section>
+
+    <section class="panel" id="receiptPanel" aria-labelledby="hReceipt">
+      <div class="panel-head">
+        <h2 id="hReceipt">Local analysis receipt</h2>
+      </div>
+    </section>
+  </div>
 </main>
 
-<!-- Toast stack -->
+<footer class="site-foot">
+  <p>Runs entirely in this page: no network request, no account, no command execution. Incident metrics, topology and recovery curves are deterministic simulations, not production measurements. MIT license.</p>
+</footer>
+
 <div class="toast-stack" id="toastStack" aria-live="polite"></div>
 
-<!-- Audit preview modal -->
-<div class="modal-backdrop" id="auditModal" role="dialog" aria-modal="true" aria-label="Audit preview">
+<div class="modal-backdrop" id="auditModal" role="dialog" aria-modal="true" aria-labelledby="modalTitle">
   <div class="modal">
     <div class="modal-head">
-      <h3 id="modalTitle">Audit Bundle Preview</h3>
-      <button class="btn-ghost btn-sm" id="btnCloseModal">✕ Close</button>
+      <h3 id="modalTitle">Audit bundle preview</h3>
+      <button type="button" class="btn btn-ghost btn-sm" id="btnCloseModal">Close</button>
     </div>
     <div class="modal-body">
       <pre id="modalPre"></pre>
@@ -226,14 +268,6 @@
   </div>
 </div>
 
-<details style="margin:16px;padding:16px;border:1px solid var(--border);border-radius:8px">
-  <summary>Structured Developer Agent Boundary</summary>
-  <p>Validate a typed action before any executor receives it. Unknown actions and all network egress are denied. This demo does not execute commands.</p>
-  <textarea id="manifest-input" aria-label="Structured action manifest" style="width:100%;min-height:100px">{"version":1,"kind":"test","parameters":{"argv":["python","-m","pytest","-q"],"cwd":"/workspace"}}</textarea>
-  <div class="manifest-presets" id="manifest-presets"></div>
-  <button id="manifest-check" class="btn-amber btn-sm">Validate Structured Manifest</button>
-  <pre id="manifest-result" aria-live="polite"></pre>
-</details>
 <script src="js/manifest-gate.js"></script>
 <script src="js/policy-engine.js"></script>
 <script src="js/telemetry.js"></script>

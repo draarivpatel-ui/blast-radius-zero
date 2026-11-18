@@ -13,7 +13,7 @@ npm test
 .venv/bin/python -m pytest -q -p no:cacheprovider --import-mode=importlib
 ```
 
-Both suites run offline. `npm test` expands to `node --test tests/*.test.cjs` and passes **50 tests**. The pytest command passes **68 tests**, including a parity check that runs the real Node regressions from Python. Combined: **118 tests, 0 failures**.
+Both suites run offline. `npm test` expands to `node --test tests/*.test.cjs` and passes **73 tests**. The pytest command passes **72 tests**. Two Python cases rerun the Node suite (a parity check and the demo-script check), so the runner totals overlap. Combined runner total: **145 passing, 0 failures**.
 
 Optional local server:
 
@@ -48,9 +48,29 @@ These are authorization decisions over descriptions. The project does not execut
 
 Malformed events fail closed. The handler logs no incoming event or payload and performs no remote calls. It is locally contract-tested, not a deployed or load-tested service. Deploying it requires a reviewed execution role and the actual provider's configuration.
 
+## Verdict console
+
+The page opens on one answer: **ALLOW**, **APPROVAL REQUIRED** or **BLOCKED**, with the blast score, the exact rule and line that decided it, and how many findings, policies and resources are involved. A single function (`BlastTelemetry.verdict`) drives the console, the header, the JSON and Markdown audits and the SARIF export, so they can never disagree.
+
+| Verdict | When |
+| --- | --- |
+| ALLOW | No rule fired |
+| APPROVAL REQUIRED | Findings exist, every one is below blocking severity, and the score is under 35 |
+| BLOCKED | Any blocking finding, a score of 35 or more, a scanner fault, or a missing analysis |
+
+One-click controls change the plan and the verdict follows:
+
+- **Inject an attack** appends `rm -rf /`, `DROP TABLE`, an `iam:*` wildcard or a `curl` secret exfiltration to the current plan.
+- **Load a plan** replaces the editor with a benign rolling restart, a read-only query (both ALLOW) or an autoscaler with a ceiling of 50 (APPROVAL REQUIRED). A test checks each label against the real engine.
+- **Contain: apply safe plan** swaps in the scenario's safe plan. All four incident safe plans scan clean (score 0, ALLOW), which a regression test enforces.
+
+The **rule inspector** lists every fired rule with its severity and line. Selecting one shows the matched text, policy, effect, the resources it reaches and the fix; the same line is flagged in the plan editor gutter and the reached resources are outlined on the map. The **blast-radius map** toggles between the proposed plan and the state after containment, and says which reached resources are not drawn on the map. On phones the map switches to a two-column layout so labels stay readable without a sideways scroller. Finding line numbers match the editor even when a plan starts with blank lines. The custom composer has no safe plan, so its containment controls are disabled instead of showing a made-up result. The **containment diff** is a line-level diff (longest common subsequence) from the current plan to the safe plan, with the score and verdict change.
+
+All editor text reaches the page through `textContent` or an HTML escaper. A headless Chrome probe typed `<img>`, `<svg onload>`, `<iframe>` and `<script>` payloads into the plan and the manifest field and found no injected element.
+
 ## Incident studio
 
-Four illustrative scenarios cover a runaway GPU billing loop, destructive database migration, cache stampede and prompt-injection exfiltration. Editable plans are scanned by the actual policy rules; clean scores are always zero and identical findings receive identical scores. The left panel offers injection chips, a safe remediation chip and a dedicated **Apply Safe Fix** button.
+Four illustrative scenarios cover a runaway GPU billing loop, destructive database migration, cache stampede and prompt-injection exfiltration. Editable plans are scanned by the actual policy rules; clean scores are always zero and identical findings receive identical scores. Each scenario's safe plan is prewritten for that scenario and labelled that way; the custom composer has none and says so.
 
 Scanner faults create a blocking finding. Obfuscation can evade a text scanner, and quoted documentation can produce false positives. The research package includes both examples rather than claiming perfect text understanding.
 
@@ -79,13 +99,13 @@ Diagnostic JSON and Markdown exports are unsigned and labelled that way. SARIF e
 
 ## Judge walkthrough
 
-1. Load a scenario and inspect its labelled simulated telemetry.
-2. Edit the proposal and inspect deterministic text findings.
-3. Read the diagnostics strip: findings, blocking severity, fired rules, distinct rules, affected resources, raw weighted score, scanner errors and modeled peak p95.
-4. Click a structured manifest preset and watch the offline gate permit or deny it.
-5. Inject a destructive command, then click **Apply Safe Fix** to see the score collapse.
+1. Read the verdict console: BLOCKED, score 89, and the rule and line that decided it.
+2. Click **Benign: rolling restart** (ALLOW, 0), then **DROP TABLE** (BLOCKED), then **Needs approval: autoscale to 50** (APPROVAL REQUIRED).
+3. Pick a rule in the inspector and watch the editor line and the map outline follow it.
+4. Open the destructive migration, flip the map to **After containment**, read the diff, then apply the safe plan (ALLOW, 0).
+5. Click the typed action gate presets: the test run is allowed, network egress and the path escape are denied.
 6. Replay the dry-run and confirm the printed seed and curve summary never change.
-7. Generate a local receipt and independently verify its SHA-256 format.
+7. Generate a local receipt and check its SHA-256 digest.
 
 ## Competition positioning
 
@@ -96,34 +116,28 @@ Local engineering specs and an automated test hook are retained, with no fabrica
 ## Project layout
 
 ```
-index.html              the three column studio
-styles.css              dark mission control visual system
+index.html              verdict console and three column workbench
+styles.css              dark security console visual system
 gate.py                 Python default-deny decision engine
 action_handler.py       offline function action-group response adapter
 js/manifest-gate.js     browser default-deny decision engine
 js/policy-engine.js     deterministic heuristic scanner and blast scoring
-js/telemetry.js         deterministic curves, breakdown, coverage, fingerprint
+js/telemetry.js         verdict, line diff, containment, curves, breakdown, fingerprint
 js/scenarios.js         four illustrative incidents plus a custom composer
 js/app.js               controller, topology, chart, diagnostics, exports
 js/vultr-sandbox.js     honest local analysis receipts
-tests/                  Node and Python regression, parity and UI contract suites
+tests/                  Node and Python regression, parity, UI and demo-script suites
+video/                  demo video, narration.txt, steps.json and build_steps.py (regenerates both)
 ```
 
 ## License
 
 MIT.
 
-## November 16 local verification
+## November 18 local verification
 
-50 Node tests and 68 Python cases passed, 0 failed. One Python case reruns
-the Node suite, so the two runner counts include repeated coverage.
+73 Node tests and 72 Python cases passed, 0 failed (Node v26.8.1, Python 3.9.6, pytest 8.4.2). Two Python cases rerun the Node suite, so the runner totals overlap.
 
-`npm test` and pytest cover every existing Node and Python test file. The
-32-bit analysis value is labeled as a fingerprint, not a digital signature.
+The revamped page was loaded in headless Chrome at 1440x900, 390x844 and 1920x1080. Each capture showed no console error, no failed request, no request outside the page's own origin and no page-level horizontal scroll (long code lines scroll inside the editor and diff boxes). Keyboard Tab order reaches the console controls, the editor toolbar, the map toggle and the map nodes, and Enter on a map node selects the rule that reaches it. The 32-bit analysis value is labeled as a fingerprint, not a digital signature. No physical hardware session was run.
 
-Verification environment. Node v24.16.0 and Python 3.9.6, with pytest 8.4.2
-for Python test files where present. No browser or physical hardware session
-was run.
-
-The page title, incident panel and log stream now identify the cloud
-incidents as simulations. No active agent swarm or cloud execution is claimed.
+The incident panel, log stream, map and recovery curves are labelled as simulations. No active agent swarm or cloud execution is claimed.
