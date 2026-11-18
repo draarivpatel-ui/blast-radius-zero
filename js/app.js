@@ -190,6 +190,7 @@
     analysis = window.BlastPolicy.analyze(text);
     renderCenter();
     renderTopology();
+    renderDiagnostics();
     syncHeader();
   }
 
@@ -381,6 +382,56 @@
     if (safe) safe.textContent = currentScenario.safeRemediation;
   }
 
+  // ── Deterministic diagnostics ────────────────────────────────────
+  function renderDiagnostics() {
+    const grid = $("#diag-grid");
+    const sigEl = $("#diag-signature");
+    const T = window.BlastTelemetry;
+    if (!T || !analysis) return;
+    const breakdown = T.scoreBreakdown(analysis);
+    const coverage = T.scannerCoverage(analysis, window.BlastPolicy.RULES);
+    const sim = T.simulate(analysis, {
+      points: 60,
+      scenarioId: currentScenario ? currentScenario.id : "default"
+    });
+    if (sigEl) sigEl.textContent = "analysis fingerprint " + T.analysisSignature(analysis);
+
+    const cells = [
+      { label: "Findings / policies", value: `${breakdown.findingCount} / ${breakdown.policyCount}`, cls: breakdown.findingCount ? "is-block" : "is-safe" },
+      { label: "Blocking findings", value: String(breakdown.bySeverity.block), cls: breakdown.bySeverity.block ? "is-block" : "is-safe" },
+      { label: "Fired scanner rules", value: `${coverage.firedRuleCount} / ${coverage.ruleCount}`, cls: "" },
+      { label: "Distinct rules hit", value: String(breakdown.distinctRules), cls: "" },
+      { label: "Affected resources", value: String(breakdown.affectedCount), cls: "" },
+      { label: "Raw weighted score", value: String(breakdown.rawScore), cls: "" },
+      { label: "Scanner errors", value: String(coverage.errorFindings), cls: coverage.errorFindings ? "is-block" : "is-safe" },
+      { label: "Modeled peak p95", value: `${sim.summary.peakP95} ms`, cls: "" }
+    ];
+
+    if (grid) {
+      grid.innerHTML = cells.map(c => `
+        <div class="diag-cell ${c.cls}">
+          <span class="diag-label">${escapeHtml(c.label)}</span>
+          <span class="diag-value">${escapeHtml(String(c.value))}</span>
+        </div>
+      `).join("");
+    }
+  }
+
+  function renderDryRunStats(sim) {
+    const el = $("#dryrun-stats");
+    if (!el) return;
+    const s = sim.summary;
+    el.innerHTML = [
+      `<span>peak <b>${s.peakP95} ms</b></span>`,
+      `<span>settled <b>${s.settledP95} ms</b></span>`,
+      `<span>safe path <b>${s.safeSettledP95} ms</b></span>`,
+      `<span>recovery ratio <b>${s.recoveryRatio}</b></span>`,
+      `<span>latency saved <b>${s.latencySavedMs} ms</b></span>`,
+      `<span>seed <b>${sim.seed}</b></span>`,
+      `<span>deterministic model</span>`
+    ].join("");
+  }
+
   // ── Dry-run chart (canvas) ────────────────────────────────────────
   function startDryRunAnimation() {
     const canvas = $("#dryRunCanvas");
@@ -391,52 +442,20 @@
     // Cancel previous
     if (dryRunRaf) cancelAnimationFrame(dryRunRaf);
 
-    // Data generation based on scenario + analysis
-    const score = analysis ? analysis.score : 50;
-    const isClean = analysis ? analysis.clean : false;
-
-    // Generate synthetic time-series (60 points)
-    const N = 60;
-    const t = Array.from({ length: N }, (_, i) => i);
-
-    // Baseline p95 (ms): starts high during incident, drops after gate
-    // Error rate (%): similar shape
-    const gateIdx = Math.floor(N * 0.42); // gate blocks ~42% in
-    const p95 = t.map(i => {
-      if (i < gateIdx) {
-        // Incident ramp
-        const base = isClean ? 420 : 900 + Math.sin(i * 0.4) * 120 + i * 18;
-        return Math.max(180, base + Math.random() * 60);
-      } else {
-        // Recovery via safe remediation
-        const decay = (i - gateIdx) / (N - gateIdx);
-        const start = t[gateIdx - 1] !== undefined ? p95UnsafeAt(gateIdx - 1, isClean) : 1100;
-        // Exponential decay to ~260ms
-        return 260 + (start - 260) * Math.exp(-decay * 3.2) + Math.random() * 18;
-      }
+    // Reproducible modeled curves from the real policy analysis. The telemetry
+    // module derives every point from the score, findings and scenario id with
+    // a fixed seed, so replaying the same proposal never changes the numbers.
+    const sim = window.BlastTelemetry.simulate(analysis, {
+      points: 60,
+      scenarioId: currentScenario ? currentScenario.id : "default"
     });
-
-    function p95UnsafeAt(idx, clean) {
-      if (clean) return 420;
-      return 900 + Math.sin(idx * 0.4) * 120 + idx * 18;
-    }
-
-    const errorRate = t.map(i => {
-      if (i < gateIdx) {
-        return isClean ? 0.6 + Math.random() * 0.5 : 2.8 + Math.sin(i * 0.35) * 0.9 + Math.random() * 0.6;
-      } else {
-        const decay = (i - gateIdx) / (N - gateIdx);
-        const start = 3.4;
-        return Math.max(0.15, start * Math.exp(-decay * 3.8) + Math.random() * 0.12);
-      }
-    });
-
-    const safePath = t.map(i => {
-      if (i < gateIdx) return p95[i];
-      // Immediately better than blocked path
-      const decay = (i - gateIdx) / (N - gateIdx);
-      return 240 + 180 * Math.exp(-decay * 4.2) + Math.random() * 10;
-    });
+    const N = sim.points;
+    const t = sim.t;
+    const gateIdx = sim.gateIndex;
+    const p95 = sim.p95;
+    const errorRate = sim.errorRate;
+    const safePath = sim.safePath;
+    renderDryRunStats(sim);
 
     // Animate progressive reveal
     let progress = 0;
@@ -620,6 +639,15 @@
         remediation: f.remediation,
       })) : [],
       policyStates: analysis ? analysis.policyStates : [],
+      diagnostics: window.BlastTelemetry && analysis ? {
+        breakdown: window.BlastTelemetry.scoreBreakdown(analysis),
+        coverage: window.BlastTelemetry.scannerCoverage(analysis, window.BlastPolicy.RULES),
+        signature: window.BlastTelemetry.analysisSignature(analysis),
+        modeledCurveSummary: window.BlastTelemetry.simulate(analysis, {
+          points: 60, scenarioId: currentScenario ? currentScenario.id : "default"
+        }).summary
+      } : null,
+      telemetryNote: "Modeled curves are deterministic functions of the real policy analysis. They are not production measurements.",
       proposal: { raw: editorText, blockedPreview: $("#diffBlocked") ? $("#diffBlocked").textContent : "", safeRemediation: currentScenario ? currentScenario.safeRemediation : "" },
       signature: { algo: "none", signer: "none", note: "Unsigned diagnostic export. Local SHA-256 receipts are separate and are not signatures." },
     };
@@ -712,7 +740,7 @@ ${payload.proposal.safeRemediation}
 
 ---
 
-*Deterministic · Reproducible · No LLM*
+*Deterministic · Reproducible · Offline · Unsigned diagnostic export*
 `;
   }
 
@@ -788,6 +816,10 @@ ${payload.proposal.safeRemediation}
       });
     }
 
+    // Apply safe remediation directly from the editor toolbar.
+    const btnSafe = $("#btnSafeFix");
+    if (btnSafe) btnSafe.addEventListener("click", applySafeFix);
+
     // Reset proposal
     const btnReset = $("#btnResetProposal");
     if (btnReset) btnReset.addEventListener("click", () => {
@@ -855,6 +887,8 @@ ${payload.proposal.safeRemediation}
     const btnComp = $("#btnComposer");
     if (btnComp) btnComp.addEventListener("click", () => selectScenario("custom"));
 
+    wireManifestPresets();
+
     // Exports
     const btnJson = $("#btnExportJson");
     if (btnJson) btnJson.addEventListener("click", () => {
@@ -920,6 +954,38 @@ ${payload.proposal.safeRemediation}
       clearTimeout(resizeTimer);
       resizeTimer = setTimeout(() => startDryRunAnimation(), 160);
     });
+  }
+
+  // ── Structured manifest quick presets ─────────────────────────────
+  function wireManifestPresets() {
+    const holder = $("#manifest-presets");
+    const input = $("#manifest-input");
+    const output = $("#manifest-result");
+    const gate = window.BlastManifest;
+    if (!holder || !input || !gate) return;
+    const presets = [
+      { label: "Permitted test", value: { version: 1, kind: "test", parameters: { argv: ["npm", "test"], cwd: "/workspace" } } },
+      { label: "Permitted read", value: { version: 1, kind: "read", parameters: { path: "/workspace/src/main.py" } } },
+      { label: "Compute at cap", value: { version: 1, kind: "compute", parameters: { replicas: 5, hourly_cost_cents: 1000, duration_minutes: 60 } } },
+      { label: "Network denied", value: { version: 1, kind: "network", parameters: { host: "example.invalid", method: "GET", data_class: "public" } } },
+      { label: "Path escape denied", value: { version: 1, kind: "read", parameters: { path: "/workspace/../private" } } }
+    ];
+    holder.innerHTML = "";
+    for (const p of presets) {
+      const btn = document.createElement("button");
+      btn.type = "button";
+      btn.textContent = p.label;
+      const text = JSON.stringify(p.value, null, 2);
+      const decision = gate.decide(p.value);
+      btn.title = decision.allowed ? "Permitted by the offline gate" : "Denied: " + decision.rules.join(", ");
+      if (!decision.allowed) btn.classList.add("is-denied");
+      btn.addEventListener("click", () => {
+        input.value = text;
+        if (output) output.textContent = JSON.stringify(decision, null, 2);
+        toast(p.label + (decision.allowed ? " permitted" : " denied: " + decision.rules.join(", ")));
+      });
+      holder.appendChild(btn);
+    }
   }
 
   // ── Boot ───────────────────────────────────────────────────────────

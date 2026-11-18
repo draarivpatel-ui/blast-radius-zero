@@ -4,7 +4,7 @@
 - [x] Test Python/browser parity and malformed inputs.
 - [x] Make text scores deterministic and scanner faults blocking.
 - [x] Replace fabricated execution receipts with measured local diagnostics.
-- [x] Add locally tested Bedrock response adapter.
+- [x] Add a locally tested function action-group response adapter.
 - [ ] Validate a real downstream executor and actual cloud deployment.
-- [ ] Capture authentic Kiro development evidence for a legitimate entrant.
+- [ ] Capture authentic development evidence for a legitimate entrant.
 - [ ] Replace legacy video with a current compliant demonstration.

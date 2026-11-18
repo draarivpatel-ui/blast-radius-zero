@@ -16,4 +16,4 @@ Structured authorization and heuristic diagnostics. No host, cloud or container 
 
 ## Acceptance evidence
 
-Python/browser policy parity, invalid schemas, boundary values, scanner faults and genuine SHA-256 receipts are covered by regression tests. Bedrock response shape is contract-tested without a deployment claim. Actual Kiro use and entrant eligibility require separate evidence.
+Python/browser policy parity, invalid schemas, boundary values, scanner faults and genuine SHA-256 receipts are covered by regression tests. The action handler response shape is contract-tested without a deployment claim. Entrant eligibility requires separate evidence.

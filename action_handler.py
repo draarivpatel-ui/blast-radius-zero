@@ -1,7 +1,7 @@
-"""AWS Bedrock function-action-group boundary adapter, testable without AWS.
+"""Generic function-action-group boundary adapter, testable offline.
 
 Deploy this together with gate.py. The handler returns a policy decision only.
-No infrastructure action, AWS request, command execution or input logging occurs.
+No infrastructure action, remote request, command execution or input logging occurs.
 """
 import json
 from dataclasses import asdict

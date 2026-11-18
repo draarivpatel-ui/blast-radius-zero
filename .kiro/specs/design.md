@@ -6,4 +6,4 @@ The text scanner supplies explanatory findings and topology diagnostics. It is n
 
 Local receipts hash the measured input and findings with WebCrypto SHA-256. They contain no fictional cloud memory, runtime or destruction result. A digest is not a signature.
 
-The Bedrock adapter accepts one manifest parameter and returns the action-group decision contract. Deployment permissions, actual execution isolation, symlink handling and target-cloud performance remain outside the validated local artifact.
+The action handler accepts one manifest parameter and returns the action-group decision contract. Deployment permissions, actual execution isolation, symlink handling and target-cloud performance remain outside the validated local artifact.

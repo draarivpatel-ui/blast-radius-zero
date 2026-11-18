@@ -1,7 +1,7 @@
 /**
  * BlastRadius Zero - Deterministic Policy Engine
  * Heuristic text scanner for shell / SQL / Terraform / JSON.
- * No LLM calls - pure deterministic analysis.
+ * Pure deterministic, offline pattern analysis with no remote calls.
  * Exposes: window.BlastPolicy.analyze(text) -> { score, violations, affectedResources, findings }
  */
 
