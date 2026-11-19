@@ -73,7 +73,6 @@
     var queueDepth = [];
 
     for (var i = 0; i < points; i++) {
-      var phase = i / (points - 1);
       var pre = i < gateIndex;
       t.push(i);
       if (pre) {
