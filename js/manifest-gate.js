@@ -52,7 +52,7 @@
     }
     return { allowed: reasons.length === 0, rules: [...new Set(reasons)].sort() };
   }
-  root.BlastManifest = { decide, scopedPath };
+  root.BlastManifest = { decide };
   if (typeof document !== "undefined") document.addEventListener("DOMContentLoaded", () => {
     document.getElementById("manifest-check")?.addEventListener("click", () => {
       const output = document.getElementById("manifest-result");
