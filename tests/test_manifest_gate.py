@@ -32,6 +32,8 @@ CASES = [
     ({}, False), (None, False), (action("unknown"), False),
     (action("compute", replicas=5.0, hourly_cost_cents=1000.0, duration_minutes=60.0), True),
     ({"version": 1.0, "kind": "read", "parameters": {"path": "/workspace"}}, True),
+    ({"version": 2, "kind": "read", "parameters": {"path": "/etc/passwd"}}, False),
+    ({"version": 2, "kind": "network", "parameters": {"host": "localhost", "method": "GET", "data_class": "public"}}, False),
 ]
 CASES += [(action("compute", replicas=replicas, hourly_cost_cents=cents, duration_minutes=minutes),
            type(replicas) is int and type(cents) is int and type(minutes) is int

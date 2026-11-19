@@ -38,12 +38,12 @@ npm test
 .venv/bin/python -m pytest -q -p no:cacheprovider --import-mode=importlib
 ```
 
-**73 Node tests passed, 0 failed. 72 Python tests passed, 0 failed.** Two Python cases rerun the Node suite, so the runner totals overlap.
+**73 Node tests passed, 0 failed. 74 Python tests passed, 0 failed.** Two Python cases rerun the Node suite, so the runner totals overlap.
 
 | Check | Verified result |
 | --- | --- |
 | Node policy, receipt, telemetry, UI contract and console tests | 73 passed |
-| Python gate parity, handler, telemetry parity, content and demo-script tests | 72 passed |
+| Python gate parity, handler, telemetry parity, content and demo-script tests | 74 passed |
 | Incident safe plans that scan clean | 4 of 4 (score 0, ALLOW) |
 | One-click plan labels that match the engine verdict | 3 of 3 |
 | Attack buttons that block a clean plan on their own | 4 of 4 |
@@ -54,7 +54,7 @@ npm test
 
 ## Devpost description
 
-**BlastRadius Zero: a blast-radius firewall for agent-proposed infrastructure changes.** Paste or load a plan and the console answers at once: ALLOW, APPROVAL REQUIRED or BLOCKED, with the exact rule and line that decided it. Inject a `DROP TABLE` or a `curl` secret exfiltration and the verdict flips on the spot. The rule inspector explains every finding, the map shows which resources the plan would reach and what the safe plan contains, and a line diff shows what changes. A typed, default-deny action gate decides structured actions, and every audit export is labelled unsigned. Everything runs offline in one page, with 73 Node tests and 72 Python tests passing.
+**BlastRadius Zero: a blast-radius firewall for agent-proposed infrastructure changes.** Paste or load a plan and the console answers at once: ALLOW, APPROVAL REQUIRED or BLOCKED, with the exact rule and line that decided it. Inject a `DROP TABLE` or a `curl` secret exfiltration and the verdict flips on the spot. The rule inspector explains every finding, the map shows which resources the plan would reach and what the safe plan contains, and a line diff shows what changes. A typed, default-deny action gate decides structured actions, and every audit export is labelled unsigned. Everything runs offline in one page, with 73 Node tests and 74 Python tests passing.
 
 ## What's next
 
