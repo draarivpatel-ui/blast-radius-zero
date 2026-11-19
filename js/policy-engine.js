@@ -122,8 +122,6 @@
         let m;
         while ((m = re.exec(text))) {
           const snippet = m[0];
-          // if WHERE appears between DELETE and ; it's safe
-          const segment = text.slice(m.index, m.index + m[0].length + 200);
           // simple: the matched snippet itself has no WHERE
           if (!/WHERE/i.test(snippet)) {
             hits.push(hit(this, text, m,
@@ -182,9 +180,6 @@
       label: "IAM wildcard action (iam:*)",
       test(text) {
         const re = /["']iam:\*["']|action\s*=\s*["']iam:\*["']|actions\s*=\s*\[[^\]]*iam:\*[^\]]*\]/gi;
-        // Also match bare iam:* in policy JSON / HCL
-        const re2 = /\biam:\*/gi;
-        // Use re2 but filter to IAM/policy context or aws cli
         const hits = [];
         let m;
         // Prefer precise match first
@@ -312,20 +307,11 @@
       label: "curl exfiltration",
       test(text) {
         const hits = [];
-        // curl with env / secret in URL or body, or piping to bash
-        const patterns = [
-          /curl[^\n]*\$\{?[_A-Z]+(?:TOKEN|SECRET|KEY|PASSWORD|CREDENTIAL)[^\n]*/gi,
-          /curl[^\n]*env[^\n]*\|\s*curl/gi,
-          /curl[^\n]*\$\(env\)[^\n]*/gi,
-          /curl[^\n]*--data[^\n]*\$[A-Z_]+/gi,
-          /curl[^\n]*https?:\/\/[^\s"']+[^\n]*/gi, // any curl to external URL is suspicious in agent context
-        ];
         // Only flag curl-to-external as exfil if combined with env/secret context
         let m;
         const curlRe = /curl[^\n]*/gi;
         while ((m = curlRe.exec(text))) {
           const line = m[0];
-          const lower = line.toLowerCase();
           const hasSecretRef = /\$(?:\{)?[A-Z_]*(?:SECRET|TOKEN|KEY|PASSWORD|ENV|CREDENTIAL|AWS_|GITHUB_)/.test(line)
             || /\benv\b/i.test(line) || /\$\(/.test(line);
           const hasExternal = /https?:\/\//.test(line);
