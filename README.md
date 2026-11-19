@@ -13,7 +13,7 @@ npm test
 .venv/bin/python -m pytest -q -p no:cacheprovider --import-mode=importlib
 ```
 
-Both suites run offline. `npm test` expands to `node --test tests/*.test.cjs` and passes **73 tests**. The pytest command passes **72 tests**. Two Python cases rerun the Node suite (a parity check and the demo-script check), so the runner totals overlap. Combined runner total: **145 passing, 0 failures**.
+Both suites run offline. `npm test` expands to `node --test tests/*.test.cjs` and passes **73 tests**. The pytest command passes **74 tests**. Two Python cases rerun the Node suite (a parity check and the demo-script check), so the runner totals overlap. Combined runner total: **147 passing, 0 failures**.
 
 Optional local server:
 
@@ -136,7 +136,7 @@ MIT.
 
 ## November 18 local verification
 
-73 Node tests and 72 Python cases passed, 0 failed (Node v26.8.1, Python 3.9.6, pytest 8.4.2). Two Python cases rerun the Node suite, so the runner totals overlap.
+73 Node tests and 74 Python cases passed, 0 failed (Node v26.8.1, Python 3.9.6, pytest 8.4.2). Two Python cases rerun the Node suite, so the runner totals overlap.
 
 The revamped page was loaded in headless Chrome at 1440x900, 390x844 and 1920x1080. Each capture showed no console error, no failed request, no request outside the page's own origin and no page-level horizontal scroll (long code lines scroll inside the editor and diff boxes). Keyboard Tab order reaches the console controls, the editor toolbar, the map toggle and the map nodes, and Enter on a map node selects the rule that reaches it. The 32-bit analysis value is labeled as a fingerprint, not a digital signature. No physical hardware session was run.
 

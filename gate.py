@@ -63,10 +63,8 @@ def decide(manifest: object) -> Decision:
     policy_hash = digest(POLICY)
     if not isinstance(manifest, dict) or set(manifest) != {"version", "kind", "parameters"}:
         return Decision(False, ("SCHEMA",), manifest_hash, policy_hash)
-    if not _integer(manifest["version"], 1, 1):
-        reasons.append("SCHEMA")
     kind, params = manifest["kind"], manifest["parameters"]
-    if not isinstance(kind, str) or not isinstance(params, dict):
+    if not _integer(manifest["version"], 1, 1) or not isinstance(kind, str) or not isinstance(params, dict):
         return Decision(False, ("SCHEMA",), manifest_hash, policy_hash)
     schemas = {
         "read": {"path"}, "test": {"argv", "cwd"}, "delete": {"path", "dry_run"},
