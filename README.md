@@ -13,7 +13,9 @@ npm test
 .venv/bin/python -m pytest -q -p no:cacheprovider --import-mode=importlib
 ```
 
-Both suites run offline. `npm test` expands to `node --test tests/*.test.cjs` and passes **73 tests**. The pytest command passes **72 tests**. Two Python cases rerun the Node suite (a parity check and the demo-script check), so the runner totals overlap. Combined runner total: **145 passing, 0 failures**.
+Both suites run offline. `npm test` expands to `node --test tests/*.test.cjs` and passes **82 tests**. The pytest command passes **72 tests**. Two Python cases rerun the Node suite (a parity check and the demo-script check), so the runner totals overlap. Combined runner total: **154 passing, 0 failures**.
+
+The Node suite now includes `tests/adversarial.test.cjs`, which pins 45 formerly bypassable payloads (flag reordering, SQL comments, unicode escapes, curl `@file` exfiltration, covert egress, exponent-notation costs) as blocked regressions, plus benign-documentation false-positive checks and what-if toggle invariants.
 
 Optional local server:
 
@@ -64,6 +66,10 @@ One-click controls change the plan and the verdict follows:
 - **Load a plan** replaces the editor with a benign rolling restart, a read-only query (both ALLOW) or an autoscaler with a ceiling of 50 (APPROVAL REQUIRED). A test checks each label against the real engine.
 - **Contain: apply safe plan** swaps in the scenario's safe plan. All four incident safe plans scan clean (score 0, ALLOW), which a regression test enforces.
 
+The **impact strip** sits directly under the verdict: proposed score and resource count on the left, contained score and count on the right, with a two-bar meter and a plain-language delta. It always compares the unfiltered engine result with the scenario's safe plan, so a what-if toggle can never fake containment.
+
+The **policy toggles** under the blast map let a judge switch each POL on or off live. The console, header, inspector, map, diagnostics and diff all re-run from the filtered analysis; the impact strip remains the unfiltered baseline. Disabling every policy yields an ALLOW what-if view, explicitly a comparison aid, not an authorization.
+
 The **rule inspector** lists every fired rule with its severity and line. Selecting one shows the matched text, policy, effect, the resources it reaches and the fix; the same line is flagged in the plan editor gutter and the reached resources are outlined on the map. The **blast-radius map** toggles between the proposed plan and the state after containment, and says which reached resources are not drawn on the map. On phones the map switches to a two-column layout so labels stay readable without a sideways scroller. Finding line numbers match the editor even when a plan starts with blank lines. The custom composer has no safe plan, so its containment controls are disabled instead of showing a made-up result. The **containment diff** is a line-level diff (longest common subsequence) from the current plan to the safe plan, with the score and verdict change.
 
 All editor text reaches the page through `textContent` or an HTML escaper. A headless Chrome probe typed `<img>`, `<svg onload>`, `<iframe>` and `<script>` payloads into the plan and the manifest field and found no injected element.
@@ -95,7 +101,11 @@ The local receipt panel uses WebCrypto SHA-256 over the actual proposal and poli
 
 Previously displayed gVisor lifecycle, memory, runtime and container-destruction numbers were not execution evidence. They have been removed. A SHA-256 digest detects a change to the serialized material; it is not a signature or an attestation from a trusted cloud runner.
 
-Diagnostic JSON and Markdown exports are unsigned and labelled that way. SARIF exports remain available for rule diagnostics. Do not publish an export containing private pasted source or credentials.
+Diagnostic JSON and Markdown exports are unsigned and labelled that way. SARIF 2.1.0 exports remain available for rule diagnostics and can now be inspected in-page with the **SARIF view** button. The export includes full rule metadata (help text, help URI, semantic version, tags, base URI, `uriBaseId` and severity-derived levels). Do not publish an export containing private pasted source or credentials.
+
+### Known heuristic limits
+
+The scanner normalizes command and SQL text before matching: it strips comments, decodes Unicode escapes and reorders equivalent shell flags. It deliberately treats quoted documentation that names a destructive command as a finding rather than silently ignoring it. It is not a shell, SQL or infrastructure parser, so a sufficiently creative encoding can still evade it. The structured manifest gate is the actual authorization boundary; the text scan only explains what it sees. The adversarial suite documents both the closed bypasses and the conservative behavior.
 
 ## Judge walkthrough
 
@@ -134,9 +144,9 @@ video/                  demo video, narration.txt, steps.json and build_steps.py
 
 MIT.
 
-## November 18 local verification
+## November 20 local verification
 
-73 Node tests and 72 Python cases passed, 0 failed (Node v26.8.1, Python 3.9.6, pytest 8.4.2). Two Python cases rerun the Node suite, so the runner totals overlap.
+82 Node tests and 72 Python cases passed, 0 failed (Node v26.8.1, Python 3.9.6, pytest 8.4.2). Two Python cases rerun the Node suite, so the runner totals overlap. The Wave 1 revamp added the impact strip, live policy toggles, SARIF in-page preview, the normalized adversarial scanner and 9 new Node regression tests.
 
 The revamped page was loaded in headless Chrome at 1440x900, 390x844 and 1920x1080. Each capture showed no console error, no failed request, no request outside the page's own origin and no page-level horizontal scroll (long code lines scroll inside the editor and diff boxes). Keyboard Tab order reaches the console controls, the editor toolbar, the map toggle and the map nodes, and Enter on a map node selects the rule that reaches it. The 32-bit analysis value is labeled as a fingerprint, not a digital signature. No physical hardware session was run.
 

@@ -38,7 +38,7 @@ test("UI 03: every aria-controls, aria-labelledby and aria-label target resolves
   for (const ref of controls.concat(labelled)) assert.ok(set.has(ref), `missing #${ref}`);
 });
 
-test("UI 04: all seven shipped scripts load in dependency order", () => {
+test("UI 04: all six shipped scripts load in dependency order", () => {
   const scripts = [...html.matchAll(/<script src="([^"]+)"><\/script>/g)].map(m => m[1]);
   assert.deepEqual(scripts, [
     "js/manifest-gate.js", "js/policy-engine.js", "js/telemetry.js",

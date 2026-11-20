@@ -66,6 +66,26 @@
       </div>
     </div>
 
+    <!-- One-screen impact readout: proposed vs contained, no scrolling needed -->
+    <div class="impact-strip" id="impactStrip" aria-label="Blast radius comparison">
+      <div class="impact-side">
+        <span class="impact-label">Proposed plan</span>
+        <span class="impact-score" id="impactBefore">-</span>
+        <span class="impact-meta" id="impactBeforeMeta">-</span>
+      </div>
+      <div class="impact-track" aria-hidden="true">
+        <div class="impact-bar impact-bar-before" id="impactBarBefore"></div>
+        <div class="impact-bar impact-bar-after" id="impactBarAfter"></div>
+        <span class="impact-arrow">&#8594;</span>
+      </div>
+      <div class="impact-side">
+        <span class="impact-label">After containment</span>
+        <span class="impact-score impact-score-safe" id="impactAfter">-</span>
+        <span class="impact-meta" id="impactAfterMeta">-</span>
+      </div>
+      <div class="impact-delta" id="impactDelta" aria-live="polite">-</div>
+    </div>
+
     <div class="console-controls">
       <div class="control-group">
         <span class="control-label" id="lblScenario">Incident</span>
@@ -157,6 +177,7 @@
           <p class="graph-note" id="graphNote" aria-live="polite"></p>
         </div>
         <div class="policy-grid" id="policyGrid"></div>
+        <div class="policy-toggles" id="policyToggles" role="group" aria-label="Live policy toggles"></div>
       </section>
 
       <section class="panel p-diag diag-strip" id="diagStrip" aria-labelledby="hDiag">
@@ -219,6 +240,7 @@
           <button type="button" class="btn btn-ghost btn-sm" id="btnExportMd"><svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 4v11m0 0l-4-4m4 4l4-4M5 20h14"/></svg>Markdown</button>
           <button type="button" class="btn btn-ghost btn-sm" id="btnExportSarif"><svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 4v11m0 0l-4-4m4 4l4-4M5 20h14"/></svg>SARIF</button>
           <button type="button" class="btn btn-ghost btn-sm" id="btnPreviewAudit" aria-expanded="false" aria-controls="auditPreview"><svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7S2 12 2 12z"/><circle cx="12" cy="12" r="3"/></svg>Preview</button>
+          <button type="button" class="btn btn-ghost btn-sm" id="btnPreviewSarif" aria-expanded="false" aria-controls="auditPreview">SARIF view</button>
         </div>
         <pre class="audit-preview" id="auditPreview" hidden></pre>
       </section>

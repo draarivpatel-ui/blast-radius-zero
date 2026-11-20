@@ -20,6 +20,8 @@
   let pickedKey = null; // rule|line|snippet of the finding the user picked
   let graphView = "proposed";
   let lastVerdictKey = null;
+  let disabledPolicies = new Set();
+  let auditPreviewMode = "markdown";
 
   // ---- DOM helpers -------------------------------------------------------
   const $ = (sel, root = document) => root.querySelector(sel);
@@ -211,14 +213,67 @@
   function analyzeAndRender() {
     const ed = $("#proposalEditor");
     const text = ed ? ed.value : "";
-    analysis = window.BlastTelemetry.withEditorLines(window.BlastPolicy.analyze(text), text);
+    const raw = window.BlastPolicy.analyze(text);
+    analysis = window.BlastTelemetry.withEditorLines(
+      window.BlastPolicy.withDisabledPolicies(raw, disabledPolicies), text);
     syncSelection();
     renderCenter();
+    renderImpactStrip(raw);
+    renderPolicyToggles(raw);
     renderGutter();
     renderInspector();
     renderTopology();
     renderDiagnostics();
     syncHeader();
+  }
+
+  // The A/B readout always compares the unfiltered engine result with the
+  // scenario's safe plan, so turning a policy off cannot fake containment.
+  function renderImpactStrip(raw) {
+    const before = raw || analysis;
+    const after = safeAnalysis;
+    const set = (id, val) => { const n = $(id); if (n) n.textContent = val; };
+    const beforeScore = before ? before.score : 0;
+    const afterScore = after ? after.score : 0;
+    set("#impactBefore", String(beforeScore));
+    set("#impactAfter", String(afterScore));
+    set("#impactBeforeMeta", before ? `${before.findings.length} findings, ${before.affected.length} resources` : "-");
+    set("#impactAfterMeta", after ? `${after.findings.length} findings, ${after.affected.length} resources` : "-");
+    const dropped = Math.max(0, beforeScore - afterScore);
+    const resources = Math.max(0, (before ? before.affected.length : 0) - (after ? after.affected.length : 0));
+    set("#impactDelta", hasSafePlan()
+      ? `Containment drops the score by ${dropped} and removes ${resources} resources from the blast radius`
+      : "No prewritten safe plan for a custom incident");
+    const barBefore = $("#impactBarBefore");
+    const barAfter = $("#impactBarAfter");
+    if (barBefore) barBefore.style.width = Math.min(100, beforeScore) + "%";
+    if (barAfter) barAfter.style.width = Math.min(100, afterScore) + "%";
+  }
+
+  function renderPolicyToggles(raw) {
+    const holder = $("#policyToggles");
+    if (!holder) return;
+    const policies = (window.BlastPolicy && window.BlastPolicy.POLICIES) || [];
+    const states = raw ? raw.policyStates : [];
+    clear(holder);
+    for (const p of policies) {
+      const state = states.find(s => s.id === p.id) || { status: "pass", count: 0 };
+      const on = !disabledPolicies.has(p.id);
+      const b = el("button", "policy-toggle" + (on ? " is-on" : " is-off"));
+      b.type = "button";
+      b.setAttribute("aria-pressed", on ? "true" : "false");
+      b.setAttribute("title", on ? `Disable ${p.id} for a what-if comparison` : `Re-enable ${p.id}`);
+      b.appendChild(el("span", "pt-dot"));
+      b.appendChild(el("span", "pt-name", p.id));
+      b.appendChild(el("span", "pt-state", on ? `ON · ${state.count}` : "OFF"));
+      b.addEventListener("click", () => {
+        if (on) disabledPolicies.add(p.id); else disabledPolicies.delete(p.id);
+        refresh();
+        const v = currentVerdict();
+        toast(`${p.id} ${on ? "disabled" : "enabled"}. Verdict now ${v.label}`);
+      });
+      holder.appendChild(b);
+    }
   }
 
   // Keep the user's pick while it still exists; otherwise inspect the
@@ -809,7 +864,7 @@
     const v = window.BlastTelemetry.verdict(analysis);
     return {
       bundle: "BlastRadius Zero - Unsigned Diagnostic Audit",
-      version: "1.1.0",
+      version: "1.2.0",
       generatedAt: now,
       scenario: currentScenario ? { id: currentScenario.id, title: currentScenario.title, severity: currentScenario.severity } : null,
       gate: {
@@ -850,26 +905,37 @@
 
   function buildSarif() {
     const now = new Date().toISOString();
+    const levelFor = sev => sev >= 9 ? "error" : sev >= 6 ? "warning" : "note";
     const rules = window.BlastPolicy.RULES.map(r => ({
       id: r.id,
       name: r.label,
       shortDescription: { text: r.label },
       fullDescription: { text: `${r.policy} - ${r.label}` },
-      defaultConfiguration: { level: r.severity >= 9 ? "error" : r.severity >= 6 ? "warning" : "note" },
-      properties: { policy: r.policy, severity: r.severity },
+      help: { text: (window.BlastPolicy.remediationFor || (() => ""))(r.id) || r.label },
+      helpUri: "https://json.schemastore.org/sarif-2.1.0.json",
+      defaultConfiguration: { level: levelFor(r.severity) },
+      properties: { policy: r.policy, severity: r.severity, tags: ["security", "blast-radius", r.policy] },
     }));
     const results = analysis ? analysis.findings.map(f => ({
       ruleId: f.rule,
-      level: f.severity >= 9 ? "error" : f.severity >= 6 ? "warning" : "note",
+      level: levelFor(f.severity),
       message: { text: f.message },
-      locations: [{ physicalLocation: { artifactLocation: { uri: "proposal://remediation-plan" }, region: { startLine: Math.max(1, f.line) } } }],
+      locations: [{ physicalLocation: {
+        artifactLocation: { uri: "proposal://remediation-plan", uriBaseId: "SRCROOT" },
+        region: { startLine: Math.max(1, f.line) }
+      } }],
       properties: { policy: f.policy, snippet: f.snippet, remediation: f.remediation },
     })) : [];
     return {
       $schema: "https://json.schemastore.org/sarif-2.1.0.json",
       version: "2.1.0",
       runs: [{
-        tool: { driver: { name: "BlastRadius Zero Gatekeeper", version: "1.1.0", rules } },
+        tool: { driver: {
+          name: "BlastRadius Zero Gatekeeper", version: "1.2.0", rules,
+          informationUri: "https://aariv.me/blast-radius-zero/",
+          semanticVersion: "1.2.0",
+        } },
+        originalUriBaseIds: { SRCROOT: { uri: "file:///workspace/" } },
         invocations: [{ executionSuccessful: true, endTimeUtc: now }],
         results,
         properties: {
@@ -1095,13 +1161,26 @@ ${payload.proposal.safeRemediation}
     });
 
     const btnPreview = $("#btnPreviewAudit");
+    const btnSarifPreview = $("#btnPreviewSarif");
     const previewEl = $("#auditPreview");
     if (btnPreview && previewEl) {
       btnPreview.addEventListener("click", () => {
-        const show = previewEl.hidden;
+        const show = previewEl.hidden || auditPreviewMode !== "markdown";
+        auditPreviewMode = "markdown";
         if (show) previewEl.textContent = buildMarkdown();
         previewEl.hidden = !show;
         btnPreview.setAttribute("aria-expanded", show ? "true" : "false");
+        if (btnSarifPreview) btnSarifPreview.setAttribute("aria-expanded", "false");
+      });
+    }
+    if (btnSarifPreview && previewEl) {
+      btnSarifPreview.addEventListener("click", () => {
+        const show = previewEl.hidden || auditPreviewMode !== "sarif";
+        auditPreviewMode = "sarif";
+        if (show) previewEl.textContent = JSON.stringify(buildSarif(), null, 2);
+        previewEl.hidden = !show;
+        btnSarifPreview.setAttribute("aria-expanded", show ? "true" : "false");
+        if (btnPreview) btnPreview.setAttribute("aria-expanded", "false");
       });
     }
 

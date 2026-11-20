@@ -139,7 +139,7 @@ code, pre, kbd, samp { font-family: var(--mono); }
 /* ---------- Verdict console ---------- */
 .console {
   --v: var(--block); --v2: var(--block-2); --vbg: var(--block-bg); --vline: var(--block-line);
-  display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1.15fr); gap: 24px;
+  display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1.15fr); gap: 14px 24px;
   padding: 22px;
   border-radius: 18px;
   border: 1px solid var(--vline);
@@ -183,6 +183,51 @@ code, pre, kbd, samp { font-family: var(--mono); }
   color: var(--v2); background: var(--vbg); border: 1px solid var(--vline);
 }
 .verdict-pill::before { content: ""; width: 7px; height: 7px; border-radius: 50%; background: var(--v2); }
+
+/* ---------- One-screen blast impact comparison ---------- */
+.impact-strip {
+  grid-column: 1 / -1;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(120px, 1.2fr) minmax(0, 1fr) auto;
+  gap: 16px;
+  align-items: center;
+  margin-top: 18px;
+  padding: 14px 16px;
+  border-radius: var(--r);
+  border: 1px solid var(--vline);
+  background: linear-gradient(90deg, var(--vbg), transparent 60%);
+}
+.impact-side { display: grid; gap: 2px; min-width: 0; }
+.impact-label { font-size: 11.5px; font-weight: 700; color: var(--muted); text-transform: uppercase; letter-spacing: .08em; }
+.impact-score { font: 800 32px/1 var(--sans); letter-spacing: -.03em; color: var(--v2); font-variant-numeric: tabular-nums; }
+.impact-score-safe { color: var(--allow-2); }
+.impact-meta { font: 11.5px/1.4 var(--mono); color: var(--text-2); }
+.impact-track { position: relative; display: grid; align-content: center; gap: 7px; min-width: 0; }
+.impact-bar { height: 10px; border-radius: 999px; min-width: 2px; transition: width .5s var(--ease); }
+.impact-bar-before { background: linear-gradient(90deg, var(--block), var(--block-2)); box-shadow: 0 0 12px -2px var(--block); }
+.impact-bar-after { background: linear-gradient(90deg, var(--allow), var(--allow-2)); box-shadow: 0 0 12px -2px var(--allow); }
+.impact-arrow { position: absolute; right: -4px; top: 50%; transform: translateY(-50%); color: var(--muted); font-size: 18px; }
+.impact-delta {
+  max-width: 230px; font-size: 12.5px; line-height: 1.4; color: var(--text-2);
+  border-left: 1px solid var(--line-2); padding-left: 14px;
+}
+
+/* ---------- Live policy what-if toggles ---------- */
+.policy-toggles { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 12px; }
+.policy-toggle {
+  display: inline-flex; align-items: center; gap: 7px;
+  padding: 5px 10px; border-radius: 999px; cursor: pointer;
+  border: 1px solid var(--line-2); background: var(--surface-2);
+  font: 600 11.5px var(--mono); color: var(--text-2);
+  transition: background .16s var(--ease), border-color .16s var(--ease);
+}
+.policy-toggle:hover { background: var(--surface-3); }
+.policy-toggle.is-on { border-color: var(--allow-line); }
+.policy-toggle.is-off { border-color: var(--block-line); opacity: .8; }
+.pt-dot { width: 7px; height: 7px; border-radius: 50%; background: var(--allow-2); }
+.policy-toggle.is-off .pt-dot { background: var(--block-2); }
+.pt-name { color: var(--text); }
+.pt-state { color: var(--muted); }
 
 .console-controls { display: grid; gap: 14px; align-content: start; min-width: 0; }
 .control-group { display: grid; gap: 7px; min-width: 0; }
@@ -513,6 +558,22 @@ code, pre, kbd, samp { font-family: var(--mono); }
   .policy-grid { grid-template-columns: 1fr 1fr; }
   .policy-card p { display: none; }
   .site-foot { padding: 6px 16px 28px; }
+}
+
+@media (max-width: 860px) {
+  .impact-strip { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 10px 14px; }
+  .impact-track { grid-column: 1 / -1; grid-row: 2; }
+  .impact-delta { grid-column: 1 / -1; grid-row: 3; max-width: none; border-left: 0; border-top: 1px solid var(--line-2); padding: 10px 0 0; }
+}
+@media (max-width: 640px) {
+  .impact-strip { padding: 12px; gap: 8px 10px; }
+  .impact-score { font-size: 26px; }
+  .impact-label { font-size: 10px; }
+}
+@media (max-width: 420px) {
+  .impact-strip { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); }
+  .impact-side { gap: 1px; }
+  .impact-meta { font-size: 10.5px; }
 }
 
 @media (prefers-reduced-motion: reduce) {
