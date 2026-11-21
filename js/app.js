@@ -933,9 +933,27 @@
       properties: { policy: r.policy, severity: r.severity, tags: ["security", "blast-radius", r.policy] },
     }));
     const ruleIndexById = new Map(rules.map((r, i) => [r.id, i]));
+    // Findings can carry rules the catalog does not know (ENGINE-ERROR).
+    // Give each one a real driver rule entry so ruleIndex always resolves
+    // to a rule whose id matches ruleId; never alias to index 0.
+    const extraRule = id => {
+      if (!ruleIndexById.has(id)) {
+        ruleIndexById.set(id, rules.length);
+        rules.push({
+          id,
+          name: id,
+          shortDescription: { text: id },
+          fullDescription: { text: "Engine diagnostic emitted by the scanner itself" },
+          help: { text: "The scanner could not complete cleanly; treat the plan as unverified until the error is resolved." },
+          defaultConfiguration: { level: "error" },
+          properties: { policy: "POL-01", severity: 10, tags: ["security", "blast-radius", "engine"] },
+        });
+      }
+      return ruleIndexById.get(id);
+    };
     const results = analysis ? analysis.findings.map(f => ({
       ruleId: f.rule,
-      ruleIndex: ruleIndexById.has(f.rule) ? ruleIndexById.get(f.rule) : 0,
+      ruleIndex: extraRule(f.rule),
       level: levelFor(f.severity),
       message: { text: f.message },
       locations: [{ physicalLocation: {

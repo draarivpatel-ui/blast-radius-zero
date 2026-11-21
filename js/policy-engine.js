@@ -49,8 +49,51 @@
       .replace(/\/\*[\s\S]*?\*\//g, m => m.replace(/[^\n]/g, " "))
       // Escapes never span lines, so shrinking them preserves line numbers.
       .replace(/\\u([0-9a-fA-F]{4})/g, (all, hex) => String.fromCharCode(parseInt(hex, 16)))
+      .replace(/\\u\{([0-9a-fA-F]+)\}/g, (all, hex) => String.fromCodePoint(parseInt(hex, 16)))
+      // ANSI-C $'...' quoting decodes escapes a shell would resolve:
+      // \xHH, \NNN octal, \n \t \\ \' \" and friends. The decoded text
+      // replaces the whole quoted span so DR\117P-style splits surface.
+      .replace(/\$'((?:[^'\\]|\\.)*)'/g, (all, inner) => inner.replace(
+        /\\(x[0-9a-fA-F]{1,2}|u[0-9a-fA-F]{4}|U[0-9a-fA-F]{8}|[0-7]{1,3}|n|r|t|a|b|e|E|f|v|\\|'|"|\?)/g,
+        (m, e) => {
+          if (/^x[0-9a-fA-F]{1,2}$/.test(e)) return String.fromCharCode(parseInt(e.slice(1), 16));
+          if (/^u[0-9a-fA-F]{4}$/.test(e)) return String.fromCharCode(parseInt(e.slice(1), 16));
+          if (/^U[0-9a-fA-F]{8}$/.test(e)) return String.fromCodePoint(parseInt(e.slice(1), 16));
+          if (/^[0-7]{1,3}$/.test(e)) return String.fromCharCode(parseInt(e, 8));
+          const map = { n: "\n", r: "\r", t: "\t", a: "\x07", b: "\x08", e: "\x1b", E: "\x1b", f: "\x0c", v: "\x0b", "\\": "\\", "'": "'", '"': '"', "?": "?" };
+          return map[e] != null ? map[e] : m;
+        }))
       .replace(/[！-～]/g, ch =>
         String.fromCharCode(ch.charCodeAt(0) - 0xfee0));
+  }
+
+  /*
+   * Shell splices backslash-newline pairs before tokenizing, so `rm -rf \`
+   * <newline> `/` is one command. Rules scan the spliced text; scanLines[i]
+   * maps every scanned character back to its true 1-based source line so
+   * findings still point at the editor line the user sees.
+   */
+  let scanLines = null;
+
+  function spliceContinuations(text) {
+    let out = "";
+    const lines = [];
+    let line = 1;
+    for (let i = 0; i < text.length; i++) {
+      const ch = text[i];
+      if (ch === "\\" && text[i + 1] === "\n") { i++; line++; continue; }
+      out += ch;
+      lines.push(line);
+      if (ch === "\n") line++;
+    }
+    return { text: out, lines };
+  }
+
+  function scannedLine(index, fallbackText) {
+    if (scanLines && typeof index === "number" && index >= 0 && index < scanLines.length) {
+      return scanLines[index];
+    }
+    return lineNo(fallbackText, index);
   }
 
   /*
@@ -78,36 +121,65 @@
     const force = /(^|\s)-[a-z]*f/.test(lower) || /--force/.test(lower);
     const args = cmd.replace(/-(?:[A-Za-z][A-Za-z0-9]*|-[\w-]+)/g, " ")
       .split(/\s+/).filter(Boolean)
-      .map(a => a.replace(/^["'`(]+|[)"'`]+$/g, ""))
+      .map(a => a.replace(/^["'`(\\{[\],]+|[)"'`\\}\],]+$/g, ""))
       .filter(Boolean);
     return { recursive, force, args };
   }
 
+  /*
+   * Lexical path canonicalization: ./, .., // and trailing slashes resolve
+   * before the root checks, so `rm -rf ././` or `rm -rf sub/..` cannot hide
+   * a cwd deletion. A relative result that still leads with .. escapes the
+   * working directory upward and counts as unbounded too.
+   */
+  function canonRmPath(a) {
+    const abs = a.startsWith("/");
+    const out = [];
+    for (const p of a.split("/")) {
+      if (p === "" || p === ".") continue;
+      if (p === "..") {
+        if (out.length && out[out.length - 1] !== "..") out.pop();
+        else if (!abs) out.push("..");
+      } else out.push(p);
+    }
+    const joined = out.join("/");
+    if (abs) return "/" + joined;
+    return joined === "" ? "." : joined;
+  }
+
   // Root-equivalent targets: /, globs off /, //, the whole tree (., .., ./),
-  // bare wildcards (./*, ../*, *), an unknown uppercase environment variable
-  // or bare home. Each can expand to an unbounded deletion target.
+  // bare wildcards (./*, ../*, *), an unknown variable or bare home. Each
+  // can expand to an unbounded deletion target.
   function rmTouchesRoot(parts) {
-    return parts.args.some(a =>
-      a === "/" || a.startsWith("/*") || /^\/{2,}$/.test(a) ||
-      /^\.{1,2}\/?$/.test(a) || /^\.{1,2}\/\*$|^\*$/.test(a) ||
-      /^\$\{?[A-Z_][A-Z0-9_]*\}?$/.test(a) || a === "~");
+    return parts.args.some(a => {
+      const c = canonRmPath(a);
+      return c === "/" || c.startsWith("/*") || c === "." || c === ".." ||
+        c.startsWith("../") || c === "*" || c.startsWith("~") ||
+        (c.startsWith("/") && /[*?[\]]/.test(c.slice(1))) ||
+        /^\$\{?[A-Za-z_][A-Za-z0-9_]*\}?$/.test(c) || /^\$.+\)$/.test(c) ||
+        /^\$\(.+\)$/.test(c);
+    });
   }
 
   function rmTouchesAbsolute(parts) {
-    return parts.args.some(a => a.startsWith("/"));
+    return parts.args.some(a => canonRmPath(a).startsWith("/"));
   }
 
-  // A shell-expanded home or any uppercase variable reference in the command
-  // text, even when it is not a standalone argument.
+  // A shell-expanded home (~, ~user, ~+, ~-) or any variable reference in
+  // the command text, even when it is not a standalone argument.
   function rmHasExpandable(cmd) {
-    return /~(?:\/|$|\s)|\$\{?[A-Z_][A-Z0-9_]*\}?/.test(cmd);
+    return /(?:^|\s)~[^\s]|\$\{[^}\n]*\}|\$(?!\{|\()\w+|\$\(|`/.test(cmd);
   }
 
   function rmCommandHits(text, rule, message, wantRoot) {
     const hits = [];
     // Command words may start after whitespace, chaining (;, &, |), command
-    // substitution ($(, `), subshell ( ( ) or grouping ({ - never mid-word.
-    const re = /(?:^|[\s;&|(`{])((?:(?:sudo|env)\s+)?(?:\/bin\/)?(?:sudo\s+)?rm\b[^\n|;&`]*)/gim;
+    // substitution ($(, `), subshell ( ( ) or grouping ({, a quote or
+    // backslash (so "rm", 'rm', \rm and r\m still resolve to rm), or JSON
+    // punctuation - never mid-word. The rm token itself may carry
+    // interleaved quote/backslash characters and an obfuscated /bin/ or
+    // sudo prefix.
+    const re = /(?:^|[\s;&|(`{'"\\])((?:(?:sudo|env)\s+)?(?:["'`\\/$]*bin["'`\\/$]*)?(?:["'`\\/\s]+sudo["'`\\/\s]+)?["'`\\$]*r["'`\\$]*m["'`\\$]*\b[^\n|;&]*)/gim;
     let m;
     while ((m = re.exec(text))) {
       const cmd = m[1];
@@ -132,6 +204,78 @@
     return hits;
   }
 
+  /*
+   * DELETE ... FROM <table> statements with the text that follows the table
+   * name, cut at the next ; or the next DML/DDL keyword. A WHERE clause on
+   * a following line still counts, and a WHERE belonging to a later
+   * statement cannot mask a bare DELETE.
+   */
+  function deleteStatements(text) {
+    const out = [];
+    // MySQL multi-table DELETE puts aliases between DELETE and FROM
+    // (DELETE u, v FROM t1 JOIN t2); an optional alias list covers it.
+    const re = /\bDELETE\s+(?:["'`\w]+\.?\*?\s*,?\s+)*FROM\s+["'`\w"]+(?:\s*\.\s*["'`\w"]+)*/gi;
+    let m;
+    while ((m = re.exec(text))) {
+      const rest = text.slice(m.index + m[0].length);
+      const semi = rest.indexOf(";");
+      let win = semi === -1 ? rest : rest.slice(0, semi);
+      const kw = win.search(/\b(?:INSERT|UPDATE|DELETE|SELECT|DROP|CREATE|ALTER|TRUNCATE|MERGE|GRANT|REVOKE)\b/i);
+      if (kw !== -1) win = win.slice(0, kw);
+      out.push({ index: m.index, head: m[0], window: win });
+    }
+    return out;
+  }
+
+  /*
+   * A WHERE body that can only evaluate to true: TRUE literals, NOT FALSE,
+   * self-equalities (id = id, 1 = 1) and identical quoted comparisons,
+   * joined by AND/OR. Anything else (a real column predicate, a LIMIT, a
+   * FALSE literal) leaves residue and is treated as bounded.
+   */
+  function isTautWhere(wb) {
+    let w = String(wb || "").replace(/\bLIMIT\b[\s\S]*$/i, "").replace(/\s+/g, " ").trim();
+    if (!w) return false;
+    // Negated-true or bare-false bodies delete nothing; they are not the
+    // unbounded-delete bypass this rule exists for.
+    const deNeg = w.replace(/\bNOT\s+FALSE\b/gi, " ");
+    if (/\bNOT\s+TRUE\b|\bFALSE\b/i.test(deNeg)) return false;
+    let prev;
+    do {
+      prev = w;
+      w = w
+        .replace(/'((?:[^'\\]|\\.)*)'\s*=\s*'\1'/g, " ")
+        .replace(/"((?:[^"\\]|\\.)*)"\s*=\s*"\1"/g, " ")
+        .replace(/\b([\w.]+)\s*=\s*\1\b/g, " ")
+        // Numeric comparisons that always hold: 0=0, 2>1, 3>=3, 1<2.
+        .replace(/\b(\d+(?:\.\d+)?)\s*(>=|<=|>|<|=)\s*(\d+(?:\.\d+)?)\b/g,
+          (all, a, op, b) => {
+            const x = +a, y = +b;
+            const t = op === ">" ? x > y : op === "<" ? x < y
+              : op === ">=" ? x >= y : op === "<=" ? x <= y : x === y;
+            return t ? " " : all;
+          })
+        .replace(/\bTRUE\b/gi, " ")
+        .replace(/\bNOT\s+FALSE\b/gi, " ")
+        .replace(/[()]/g, " ");
+    } while (w !== prev);
+    return w.replace(/\b(?:AND|OR|NOT|WHERE|IS|NULL|IN|EXISTS|LIKE|BETWEEN)\b/gi, " ").trim() === "";
+  }
+
+  /*
+   * Classify one IAM Action value. Returns a risk tag or null. Bare "*" is
+   * left to the dedicated Action "*" rule; service wildcards (s3:*, ec2:*),
+   * iam:* family, sts:* and sts:AssumeRole* all violate least privilege.
+   */
+  function iamActionRisk(v) {
+    const s = String(v || "").trim().replace(/^["'`]+|["'`,}\]]+$/g, "");
+    if (!s || s === "*" || !s.includes("*")) return null;
+    if (/^iam:/i.test(s)) return "iam-wildcard";
+    if (/^sts:/i.test(s)) return "sts-wildcard";
+    if (/^[a-z][a-z0-9-]*:/i.test(s)) return "service-wildcard";
+    return null;
+  }
+
   function numeric(text) {
     const n = Number(text);
     return Number.isFinite(n) ? n : 0;
@@ -146,24 +290,49 @@
    */
   function obfuscatedSqlHits(text, rule, message) {
     const hits = [];
-    const lines = String(text).split("\n");
+    const byLine = new Set();
+    const push = (index, snippet) => {
+      const line = scannedLine(index, text);
+      if (byLine.has(line)) return;
+      byLine.add(line);
+      hits.push({
+        rule: rule.id,
+        policy: rule.policy,
+        severity: rule.severity,
+        label: rule.label,
+        message,
+        snippet: String(snippet).trim().slice(0, 140),
+        line,
+        remediation: remediationFor(rule.id),
+      });
+    };
     const plain = /DROP\s+TABLE|DROP\s+DATABASE|DROP\s+SCHEMA|TRUNCATE|FLUSHALL/i;
     const hidden = /DROPTABLE|DROPDATABASE|DROPSCHEMA|TRUNCATE|FLUSHALL/i;
+    const lines = String(text).split("\n");
+    let offset = 0;
     for (let i = 0; i < lines.length; i++) {
       const line = lines[i];
       const compact = line.replace(/[\t ]+/g, "");
-      if (compact === line || plain.test(line)) continue;
-      if (hidden.test(compact)) {
-        hits.push({
-          rule: rule.id,
-          policy: rule.policy,
-          severity: rule.severity,
-          label: rule.label,
-          message,
-          snippet: line.trim().slice(0, 140),
-          line: i + 1,
-          remediation: remediationFor(rule.id),
-        });
+      if (compact !== line && !plain.test(line) && hidden.test(compact)) {
+        push(offset, line);
+      }
+      offset += line.length + 1;
+    }
+    /*
+     * SQL line comments split keywords the same way block comments do:
+     * `DROP-- x` <newline> `TABLE t` is DROP TABLE in Postgres-style dialects
+     * and `DROP#x` does it in MySQL. Per physical line this never compacts to
+     * a keyword, so each ;-delimited statement is comment-stripped and fully
+     * whitespace-collapsed before the hidden-keyword test.
+     */
+    let cursor = 0;
+    for (const seg of String(text).split(";")) {
+      const segStart = cursor;
+      cursor += seg.length + 1;
+      const stripped = seg.replace(/--[^\n]*/g, " ").replace(/#[^\n]*/g, " ");
+      const compactAll = stripped.replace(/\s+/g, "");
+      if (hidden.test(compactAll) && !plain.test(seg)) {
+        push(segStart, seg);
       }
     }
     return hits;
@@ -181,16 +350,30 @@
    * protected branch (main, master, prod*, release*, deploy*) is a
    * destructive rewrite of shared history.
    */
+  /*
+   * git push force indicators, checked on the captured segment rather than
+   * inside the regex so combined short flags (-fu, -ufv), +refspec force
+   * updates and --mirror all count. --force-with-lease and
+   * --force-if-includes still rewrite remote history.
+   */
+  function gitPushIsForce(cmd) {
+    return /(?:^|\s)--force(?:-[\w-]+)?(?=[\s"'`\\)}\]]|$)/i.test(cmd)
+      || /(?:^|\s)--mirror(?=[\s"'`\\)}\]]|$)/i.test(cmd)
+      || /(?:^|\s)-[A-Za-z]*f[A-Za-z]*(?=[\s"'`\\)}\]]|$)/.test(cmd)
+      || /\s\+\S/.test(cmd);
+  }
+
   function gitForceHits(text, rule, message, wantProtected) {
     const hits = [];
-    const re = /(?:^|[\s;&|])((?:git\b[^\n|;&]*)?\bpush\b[^\n|;&]*(?:--force(?:-with-lease)?|-f)\b[^\n|;&]*)/gim;
+    const re = /(?:^|[\s;&|(`{'"\\])((?:git\b[^\n|;&]*)?\bpush\b[^\n|;&]*)/gim;
     let m;
     while ((m = re.exec(text))) {
       const cmd = m[1];
       const lineStart = text.lastIndexOf("\n", m.index) + 1;
       const prefix = text.slice(lineStart, m.index);
       if (/^\s*(?:#|--|\/\/|\*)/i.test(prefix)) continue;
-      if (echoDocOnly(prefix + cmd)) continue;
+      if (echoDocOnly((prefix + m[0]).trimEnd())) continue;
+      if (!gitPushIsForce(cmd)) continue;
       const protectedBranch = /\b(?:origin|upstream)\s+\S*(?:\bmain\b|\bmaster\b|\bprod\w*|\brelease[\w./-]*|\bdeploy\w*)/i.test(cmd)
         || /\b(?:main|master|prod\w*|release[\w./-]*|deploy\w*)\s*$/i.test(cmd.trim());
       if (wantProtected && !protectedBranch) continue;
@@ -228,6 +411,46 @@
         // are reported once by R01-rm-rf, never twice.
         return rmCommandHits(text, this,
           "Recursive forced deletion requires an explicit allowlist", false);
+      }
+    },
+    {
+      id: "R01-indirect-command",
+      policy: "POL-01",
+      severity: 9,
+      label: "Variable command, destructive flags",
+      test(text) {
+        // $CMD / ${CMD} / $(...) / `...` as the command word hides what runs.
+        // Recursive+force flags on an absolute, root or expandable target is
+        // an rm-shaped payload regardless of the hidden binary's name.
+        const re = /(?:^|[\s;&|(`{'"\\])(\$\{?[A-Za-z_]\w*\}?|\$\([^)\n]*\)|`[^`\n]*`)\s+([^\n|;&]*)/g;
+        const hits = [];
+        let m;
+        while ((m = re.exec(text))) {
+          const varWord = m[1];
+          const lineStart = text.lastIndexOf("\n", m.index) + 1;
+          const prefix = text.slice(lineStart, m.index);
+          if (/^\s*(?:#|--|\/\/|\*)/i.test(prefix)) continue;
+          if (echoDocOnly((prefix + m[0]).trimEnd())) continue;
+          // echo/printf/cat-style printers take the variable as an argument,
+          // never as a command word - but only while no ; | & separates them.
+          if (/^\s*(?:echo|printf|cat|yes|seq|printenv|type|which)\b\s*[^|;&]*$/i.test(prefix)) continue;
+          const argsText = m[2];
+          const flags = (argsText.match(/-(?:[A-Za-z][A-Za-z0-9]*|-[\w-]+)/g) || []).join(" ").toLowerCase();
+          const recursive = /(^|\s)-[a-z]*r/.test(flags) || /--recursive/.test(flags);
+          const force = /(^|\s)-[a-z]*f/.test(flags) || /--force/.test(flags);
+          if (!recursive || !force) continue;
+          const targets = argsText.replace(/-(?:[A-Za-z][A-Za-z0-9]*|-[\w-]+)/g, " ")
+            .split(/\s+/)
+            .map(a => a.replace(/^["'`(\\{[\],]+|[)"'`\\}\],]+$/g, ""))
+            .filter(Boolean);
+          const parts = { args: targets };
+          const dangerous = rmTouchesRoot(parts)
+            || /\$\{|\$\(|`|(?:^|\s)~/.test(argsText);
+          if (!dangerous) continue;
+          hits.push(hit(this, text, { 0: (varWord + " " + argsText.trim()), index: m.index + m[0].indexOf(varWord) },
+            "Command name resolved at runtime runs recursive force flags on an unbounded target - pin the binary and target explicitly"));
+        }
+        return hits;
       }
     },
     {
@@ -286,14 +509,11 @@
       severity: 8,
       label: "DELETE without WHERE",
       test(text) {
-        const re = /\bDELETE\s+FROM\s+["'`\w.]+\s*(?:;|\n|$|LIMIT\s+\d+)/gi;
         const hits = [];
-        let m;
-        while ((m = re.exec(text))) {
-          if (!/WHERE/i.test(m[0])) {
-            hits.push(hit(this, text, m,
-              `DELETE without WHERE clause - would remove all rows: \`${m[0].trim().slice(0, 70)}\``));
-          }
+        for (const st of deleteStatements(text)) {
+          if (/\bWHERE\b/i.test(st.window)) continue;
+          hits.push(hit(this, text, { 0: st.head + st.window, index: st.index },
+            `DELETE without WHERE clause - would remove all rows: \`${(st.head + st.window).trim().slice(0, 70)}\``));
         }
         return hits;
       }
@@ -314,7 +534,8 @@
       severity: 10,
       label: "find -delete",
       test(text) {
-        const re = /\bfind\b[^\n]*\s(?:-delete\b|-exec\b[^\n]*\brm\b)/gi;
+        // -delete, -exec/-execdir/-ok/-okdir running a destructive payload.
+        const re = /\bfind\b[^\n]*\s(?:-delete\b|-exec(?:dir)?\b[^\n]*(?:\brm\b|\b(?:ba)?sh\b|\bzsh\b|\bdd\b)|-o(?:k|kdir)\b)/gi;
         return matchRule(text, re, this, "find -delete is an unbounded recursive deletion");
       }
     },
@@ -324,7 +545,7 @@
       severity: 10,
       label: "Disk wipe",
       test(text) {
-        const re = /\b(?:shred|wipefs|mkfs(?:\.[\w-]+)?|dd\s+if=[^\n]*of=\/dev\/)\b[^\n]*/gi;
+        const re = /\b(?:shred|wipefs|mkfs(?:\.[\w-]+)?)\b[^\n]*|\bdd\b[^\n]*\bof\s*=\s*["']?\/dev\/|[^\n>]*>\s*\/dev\/(?:sd[a-z]|nvme\d|vd[a-z]|xvd[a-z]|mapper\/)/gi;
         return matchRule(text, re, this, "Destructive disk operation - irreversible device wipe");
       }
     },
@@ -334,7 +555,10 @@
       severity: 9,
       label: "kubectl delete namespace",
       test(text) {
-        const re = /\bkubectl\s+delete\s+(?:ns|namespace)\b[^\n]*/gi;
+        // kubectl/oc global flags (-n ns, --context=x, -A) may sit before or
+        // after delete; plural resource names and oc projects count too.
+        const flag = String.raw`(?:-{1,2}[\w-]+(?:=\S+|\s+\S+)?\s+)*`;
+        const re = new RegExp(String.raw`\b(?:kubectl|oc)\s+` + flag + String.raw`delete\s+` + flag + String.raw`(?:namespaces?|projects?|ns)\b[^\n]*`, "gi");
         return matchRule(text, re, this, "kubectl delete namespace - destroys all workloads in namespace");
       }
     },
@@ -344,8 +568,19 @@
       severity: 9,
       label: "kubectl delete --all",
       test(text) {
-        const re = /\bkubectl\s+delete[^\n]*--all\b[^\n]*/gi;
-        return matchRule(text, re, this, "kubectl delete --all - unbounded resource deletion");
+        // Capture each kubectl/oc delete segment, then check for an
+        // unbounded selector wherever the flags landed.
+        const re = /\b(?:kubectl|oc)\b[^\n|;&`]*?\bdelete\b[^\n|;&`]*/gi;
+        const hits = [];
+        let m;
+        while ((m = re.exec(text))) {
+          const seg = m[0];
+          if (/\bdelete\s+all\b/i.test(seg)
+            || /(?:^|\s)(?:--all|--all-namespaces|-A)(?=[\s"'`\\)\]}]|$)/.test(seg)) {
+            hits.push(hit(this, text, m, "kubectl delete --all - unbounded resource deletion"));
+          }
+        }
+        return hits;
       }
     },
     {
@@ -354,7 +589,9 @@
       severity: 9,
       label: "terraform destroy",
       test(text) {
-        const re = /\bterraform\s+destroy\b[^\n]*/gi;
+        // Global flags such as -chdir=dir may precede the subcommand, and
+        // OpenTofu and the tf binary alias share the same destroy semantics.
+        const re = /\b(?:terraform|tofu|tf)\s+(?:(?:-{1,2}[\w-]+)(?:=\S+)?\s+)*destroy\b[^\n]*/gi;
         return matchRule(text, re, this, "terraform destroy - deletes all managed infrastructure");
       }
     },
@@ -364,7 +601,7 @@
       severity: 8,
       label: "terraform apply -auto-approve",
       test(text) {
-        const re = /\bterraform\s+apply\b[^\n]*-auto-approve/gi;
+        const re = /\b(?:terraform|tofu|tf)\s+(?:(?:-{1,2}[\w-]+)(?:=\S+)?\s+)*apply\b[^\n]*-auto-approve(?:=\S+)?/gi;
         return matchRule(text, re, this, "terraform apply -auto-approve skips the plan review step entirely");
       }
     },
@@ -387,8 +624,8 @@
       severity: 9,
       label: "Dynamic SQL EXEC",
       test(text) {
-        const re = /\bEXEC(?:UTE)?\s*\(\s*@|\bEXEC(?:UTE)?\s+(?:xp_|sp_)\w+/gi;
-        return matchRule(text, re, this, "Dynamic or system SQL execution - xp_cmdshell and EXEC(@sql) run arbitrary commands");
+        const re = /\bEXEC(?:UTE)?\s*\(\s*@|\bEXEC(?:UTE)?\s+(?:xp_|sp_|IMMEDIATE\b)\w*|\bEXEC\s*\(\s*['"]/gi;
+        return matchRule(text, re, this, "Dynamic or system SQL execution - xp_cmdshell, EXECUTE IMMEDIATE and EXEC(@sql) run arbitrary commands");
       }
     },
     {
@@ -407,8 +644,28 @@
       severity: 9,
       label: "DELETE with tautology WHERE",
       test(text) {
-        const re = /\bDELETE\s+FROM\b[^;\n]*\bWHERE\b[^;\n]*\b(?:1\s*=\s*1|TRUE)\b|\bDELETE\s+FROM\b[^;\n]*'[^']*'\s*=\s*'[^']*'/gi;
-        return matchRule(text, re, this, "WHERE clause is always true - the DELETE removes every row");
+        const hits = [];
+        for (const st of deleteStatements(text)) {
+          const wi = st.window.search(/\bWHERE\b/i);
+          if (wi === -1) continue;
+          const wb = st.window.slice(wi + 5);
+          if (isTautWhere(wb)) {
+            const frag = (st.head + st.window.slice(0, wi + 5 + wb.length)).trim();
+            hits.push(hit(this, text, { 0: frag, index: st.index },
+              `WHERE clause is always true - the DELETE removes every row: \`${frag.slice(0, 70)}\``));
+          }
+        }
+        return hits;
+      }
+    },
+    {
+      id: "R01-merge-delete",
+      policy: "POL-01",
+      severity: 9,
+      label: "MERGE ... DELETE",
+      test(text) {
+        const re = /\bMERGE\s+INTO\b[^;]*\bWHEN\s+MATCHED\b[^;]*\bDELETE\b|\bMERGE\b[^;\n]*\bDELETE\s+(?:WHEN|THEN|ELSE)\b/gi;
+        return matchRule(text, re, this, "MERGE with a DELETE action removes matched rows in bulk - require a key-scoped predicate and row preview");
       }
     },
     {
@@ -447,7 +704,9 @@
       severity: 9,
       label: "curl piped to tar -C /",
       test(text) {
-        const re = /\bcurl\b[^\n]*\|\s*tar\s+x[^\n]*-C\s+\/(?:\s|$)/gi;
+        // curl or wget feeding tar/bsdtar/gtar extraction into /, with -C,
+        // --directory or a bare `tar x..` operand list.
+        const re = /\b(?:curl|wget)\b[^\n]*\|\s*(?:sudo\s+)?(?:bsdtar|gtar|tar)\b[^\n]*(?:(?:\s-[a-zA-Z]*x[a-zA-Z]*|\s--extract\b|\sx[a-z]*\s)[^\n]*(?:-C\s+\/|--directory[=\s]+\/)(?:\s|$))/gi;
         return matchRule(text, re, this, "Remote archive extracted into the filesystem root - arbitrary file write");
       }
     },
@@ -477,8 +736,42 @@
       severity: 8,
       label: "git clean -fdx",
       test(text) {
-        const re = /\bgit\s+clean\b[^\n]*\s-[A-Za-z]*[fdx]/gi;
-        return matchRule(text, re, this, "git clean with -f/-d/-x deletes untracked and ignored files unconditionally");
+        // Anything may sit between git and clean (-C dir, --git-dir=...),
+        // and both short clusters (-fdx) and --force count. A single-dash
+        // short flag carrying f, d or x is required so --dry-run stays clean.
+        const re = /\bgit\b[^\n|;&`]*?\bclean\b[^\n|;&`]*/gi;
+        const hits = [];
+        let m;
+        while ((m = re.exec(text))) {
+          const seg = m[0];
+          if (/(?:\s-(?!-)[A-Za-z]*[fdx][A-Za-z]*|\s--force\b)/i.test(seg)) {
+            hits.push(hit(this, text, m, "git clean with -f/-d/-x deletes untracked and ignored files unconditionally"));
+          }
+        }
+        return hits;
+      }
+    },
+    {
+      id: "R01-git-destructive",
+      policy: "POL-01",
+      severity: 7,
+      label: "Destructive git operation",
+      test(text) {
+        const hits = [];
+        const re = /\bgit\b[^\n|;&`]*?(?:\breset\b[^\n|;&`]*--hard\b|\bbranch\b[^\n|;&`]*?(?:\s-D\b|\s--delete\b(?=[^\n|;&`]*--force\b)|\s--force\b(?=[^\n|;&`]*--delete\b))|\bpush\b[^\n|;&`]*(?:--delete\b|\s:\S)|\bfilter-branch\b|\bfilter-repo\b|\bstash\s+(?:drop|clear)\b|\bupdate-ref\s+-d\b|\btag\s+-d\b|\b(?:checkout|switch)\b[^\n|;&`]*\s(?:-[fF]|--force|--discard-changes)\b)/gi;
+        let m;
+        while ((m = re.exec(text))) {
+          hits.push(hit(this, text, m, "Destructive git operation discards work or deletes refs - prefer a reviewed, reversible path"));
+        }
+        // Bare-path discards: git checkout . / git checkout -- . / git restore .
+        // git restore --staged (or -S) only unstages; it destroys nothing.
+        const dotRe = /\bgit\b[^\n|;&`]*?\b(?:checkout|restore)\b[^\n|;&`]*?(?:\s--\s+|\s)\.(?=[\s"'`\\)\]}]|$)/gi;
+        while ((m = dotRe.exec(text))) {
+          const seg = m[0];
+          if (/\brestore\b/i.test(seg) && /--staged\b|\s-S\b/.test(seg)) continue;
+          hits.push(hit(this, text, m, "git checkout/restore on . discards uncommitted changes across the tree"));
+        }
+        return hits;
       }
     },
     {
@@ -487,7 +780,9 @@
       severity: 8,
       label: "xargs rm",
       test(text) {
-        const re = /\bxargs\s+(?:\S+\s+)?rm\b/gi;
+        // Flag clusters with separate values (-I {}, -P 4, --replace={})
+        // may sit between xargs and rm.
+        const re = /\bxargs\s+(?:(?:-{1,2}[\w-]+)(?:=\S+|\s+\S+)?\s+)*rm\b/gi;
         return matchRule(text, re, this, "Deletion targets piped through xargs are unbounded - enumerate and allowlist paths first");
       }
     },
@@ -497,7 +792,9 @@
       severity: 8,
       label: "Recursive chmod 777",
       test(text) {
-        const re = /\bchmod\b(?=[^\n]*\s-[A-Za-z]*R)(?=[^\n]*\b(?:777|666)\b)/gi;
+        // Recursive (-R/--recursive) world-writable modes: 777, 0777, 666,
+        // 0666 and the sticky 1777 all expose files to modification.
+        const re = /\bchmod\b(?=[^\n]*(?:\s-[A-Za-z]*R|\s--recursive\b))(?=[^\n]*\b1?0{0,2}(?:777|666)\b)/gi;
         return matchRule(text, re, this, "Recursive world-writable permissions expose every file to modification");
       }
     },
@@ -507,7 +804,7 @@
       severity: 8,
       label: "Forced process kill",
       test(text) {
-        const re = /\bpkill\s+-9\b|\bkillall\b|\bkill\s+-9\s+(?:1|-1|\$\$)\b/gi;
+        const re = /\bpkill\s+(?:-[a-zA-Z]*9|-[a-zA-Z]*KILL|-[a-zA-Z]*f\b|--full\b)|\bkillall\b|\bkill\s+(?:-[a-zA-Z]*9|-[a-zA-Z]*KILL|-[a-zA-Z]*SIGKILL)\s+(?:1|-1|\$\$)\b/gi;
         return matchRule(text, re, this, "SIGKILL against every matching process or PID 1 - destroys the agent runtime and init");
       }
     },
@@ -527,7 +824,9 @@
       severity: 9,
       label: "NoSQL drop",
       test(text) {
-        const re = /\bdropDatabase\s*\(|\.\s*drop\s*\(\s*\)/gi;
+        // drop()/dropDatabase() plus filter-less deletes: deleteMany({}),
+        // remove({}), deleteOne() with no predicate all remove everything.
+        const re = /\bdropDatabase\s*\(|\.\s*(?:drop|deleteMany|removeMany|deleteOne|remove)\s*\(\s*(?:\{\s*\}|null|undefined)?\s*\)/gi;
         return matchRule(text, re, this, "Database or collection drop through a NoSQL shell - irreversible data loss");
       }
     },
@@ -537,12 +836,20 @@
       severity: 8,
       label: "CLI cluster resize",
       test(text) {
-        const re = /\b(?:vultr(?:-cli)?|doctl|gcloud|aws)\s+\S+(?:\s\S+)*\s+(?:scale|resize)\b[^\n]*--count\s+(\d+(?:\.\d+)?(?:[eE][+-]?\d+)?)/gi;
+        const num = "(\\d+(?:\\.\\d+)?(?:[eE][+-]?\\d+)?)";
+        const patterns = [
+          new RegExp("\\b(?:vultr(?:-cli)?|doctl|gcloud|aws)\\s+\\S+(?:\\s\\S+)*\\s+(?:scale|resize)\\b[^\\n]*--count\\s+" + num, "gi"),
+          new RegExp("\\baws\\s+autoscaling\\s+set-desired-capacity\\b[^\\n]*--desired-capacity\\s+" + num, "gi"),
+          new RegExp("\\bdoctl\\s+kubernetes\\s+cluster\\s+node-pool\\s+update\\b[^\\n]*--size\\s+" + num, "gi"),
+          new RegExp("\\bgcloud\\s+container\\s+clusters\\s+update\\b[^\\n]*--num-nodes\\s+" + num, "gi"),
+        ];
         const hits = [];
-        let m;
-        while ((m = re.exec(text))) {
-          const n = numeric(m[1]);
-          if (n > 10) hits.push(hit(this, text, m, `CLI resize to ${n} nodes breaches the cost-safe ceiling`));
+        for (const re of patterns) {
+          let m;
+          while ((m = re.exec(text))) {
+            const n = numeric(m[1]);
+            if (n > 10) hits.push(hit(this, text, m, `CLI resize to ${n} nodes breaches the cost-safe ceiling`));
+          }
         }
         return hits;
       }
@@ -553,8 +860,16 @@
       severity: 8,
       label: "Force delete without grace",
       test(text) {
-        const re = /\bkubectl\s+delete\b[^;\n]*--force\b[^;\n]*--grace-period=0|--grace-period=0[^;\n]*--force\b/gi;
-        return matchRule(text, re, this, "Zero-grace forced deletion skips finalizers and can strand dependent state");
+        const re = /\b(?:kubectl|oc)\b[^\n|;&`]*?\bdelete\b[^\n|;&`]*/gi;
+        const hits = [];
+        let m;
+        while ((m = re.exec(text))) {
+          const seg = m[0];
+          if (/(?:^|\s)--force(?=[\s"'`\\)\]}]|$)/.test(seg) && /--grace-period=0\b/.test(seg)) {
+            hits.push(hit(this, text, m, "Zero-grace forced deletion skips finalizers and can strand dependent state"));
+          }
+        }
+        return hits;
       }
     },
     {
@@ -563,7 +878,7 @@
       severity: 8,
       label: "helm uninstall",
       test(text) {
-        const re = /\bhelm\s+(?:uninstall|delete)\b/gi;
+        const re = /\bhelm\s+(?:(?:-{1,2}[\w-]+)(?:=\S+|\s+\S+)?\s+)*(?:uninstall|delete)\b/gi;
         return matchRule(text, re, this, "helm uninstall removes the whole release - verify scope and backups first");
       }
     },
@@ -577,34 +892,115 @@
         return matchRule(text, re, this, "Recursive ownership change rewrites every file under the target path");
       }
     },
+    {
+      id: "R01-remote-exec",
+      policy: "POL-01",
+      severity: 10,
+      label: "Remote script execution",
+      test(text) {
+        // eval of a command substitution, process-substitution shells,
+        // /dev/stdin sourcing and curl|wget piped into an interpreter all
+        // run attacker-controlled code.
+        const re = /\beval\s+["'`]*\$\(|\beval\s+`|\.\s+\/dev\/stdin\b|\bsource\s+\/dev\/stdin\b|\b(?:bash|sh|zsh|dash|ksh)\s+<\(|\b(?:curl|wget)\b[^\n]*\|\s*(?:sudo\s+)?(?:bash|sh|zsh|dash|ksh|python[\d.]*|perl|ruby|node|php)\b(?=\s*(?:$|[;|&]|\s+-{1,2}[\w-]*\b|\s+-\s|\s*-\s*$))/gi;
+        return matchRule(text, re, this, "Remote or substituted payload executed directly - review the decoded script before running it");
+      }
+    },
+    {
+      id: "R01-host-power",
+      policy: "POL-01",
+      severity: 9,
+      label: "Host power control",
+      test(text) {
+        // Only command position counts: line start, chaining operators or
+        // wrappers, so prose like "the pod will reboot" stays quiet.
+        const re = /(?:^|[\n;&|(`{]|\|\||&&)\s*(?:(?:sudo|doas)(?:\s+-{1,2}[\w-]+)*\s+|env\s+(?:[A-Za-z_]\w*=\S+\s+)*|[A-Za-z_]\w*=\S+\s+)*(?:shutdown|reboot|poweroff|halt|init\s+[06]\b|telinit\s+[06]\b|systemctl\s+(?:poweroff|reboot|halt|kexec|isolate)\b|echo\s+[bo]\s*>\s*\/proc\/sysrq-trigger|:\(\)\s*\{\s*:\|:&\s*\};:)/gi;
+        return matchRule(text, re, this, "Host power or fork-bomb command - takes the whole runtime down");
+      }
+    },
+    {
+      id: "R01-docker-bulk",
+      policy: "POL-01",
+      severity: 8,
+      label: "Bulk container operation",
+      test(text) {
+        // Mass rm/kill/stop driven by docker ps output, or ps -aq piped to
+        // xargs docker - every container goes at once.
+        const re = /\bdocker\s+(?:rm|rmi|kill|stop|pause|restart|rename)\b[^\n]*\$\(\s*docker\s+ps|\bdocker\s+(?:ps|container\s+ls)\b[^\n]*\|\s*xargs\b[^\n]*\bdocker\s+(?:rm|rmi|kill|stop)\b/gi;
+        return matchRule(text, re, this, "Bulk container deletion or kill via docker ps - enumerate and allowlist targets first");
+      }
+    },
+    {
+      id: "R01-sql-file-io",
+      policy: "POL-01",
+      severity: 8,
+      label: "SQL file read/write",
+      test(text) {
+        // INTO OUTFILE/DUMPFILE writes server-side files; LOAD_FILE() reads
+        // arbitrary server paths into query results (exfiltration primitive).
+        const re = /\bSELECT\b[^;]{0,400}?\bINTO\s+(?:OUTFILE|DUMPFILE)\b|\bLOAD_FILE\s*\(/gi;
+        return matchRule(text, re, this, "SQL file IO reads or writes server filesystem paths - require an allowlisted, reviewed statement");
+      }
+    },
 
     // ── POL-02 : Least Privilege IAM ────────────────────────────────
     {
       id: "R02-iam-wildcard-action",
       policy: "POL-02",
       severity: 10,
-      label: "IAM wildcard action (iam:*)",
+      label: "IAM wildcard action",
       test(text) {
         const hits = [];
         const seen = new Set();
+        const push = (idx, len, msg) => {
+          if (seen.has(idx)) return;
+          seen.add(idx);
+          hits.push(hit(this, text, { 0: text.substr(idx, len), index: idx }, msg));
+        };
+        /*
+         * Action/Actions assignments in JSON, YAML, HCL, TOML or inline
+         * jsonencode: scalar, array and block-list forms all land here. The
+         * value span runs until the next policy key so "Resource" or
+         * "Effect" entries are never mistaken for actions.
+         */
+        const keyRe = /\bactions?["'`]?\s*[:=]/gi;
         let m;
-        const precise = /["']iam:\*["']|action\s*=\s*["']iam:\*["']|actions\s*=\s*\[[^\]]*iam:\*[^\]]*\]/gi;
-        while ((m = precise.exec(text))) {
-          hits.push(hit(this, text, m, "IAM wildcard action `iam:*` - grants full IAM control"));
-          for (let i = m.index; i < m.index + m[0].length; i++) seen.add(i);
+        while ((m = keyRe.exec(text))) {
+          const start = m.index + m[0].length;
+          let span = text.slice(start, start + 500);
+          const stop = span.search(/\b(?:resources?|effect|sid|condition|principal|notaction|notresources?)\b|["'`](?:resources?|effect|sid|condition|principal)["'`]\s*:/i);
+          if (stop !== -1) span = span.slice(0, stop);
+          const valRe = /"([^"\n]{1,160})"|'([^'\n]{1,160})'|`([^`\n]{1,160})`|([A-Za-z0-9*][A-Za-z0-9*:_-]*)/g;
+          let vm;
+          while ((vm = valRe.exec(span))) {
+            const v = vm[1] || vm[2] || vm[3] || vm[4] || "";
+            // A bare "*" sitting deep inside the value span is being
+            // assembled by an expression (replace/jsonencode/for/join)
+            // rather than assigned directly; Action "*" itself is owned
+            // by R02-action-all so direct values stay single-flagged.
+            if (v === "*" && vm.index > 4) {
+              push(start + vm.index, vm[0].length,
+                "Action \"*\" assembled inside a policy expression - grants every API operation");
+              continue;
+            }
+            const risk = iamActionRisk(v);
+            if (!risk) continue;
+            const label = risk === "iam-wildcard" ? "IAM wildcard action"
+              : risk === "sts-wildcard" ? "STS wildcard action"
+              : "AWS service wildcard action";
+            push(start + vm.index, vm[0].length,
+              `${label} \`${v}\` - grants far more than the task needs`);
+          }
         }
-        // Bare iam:* in shell, HCL or prose about a policy statement.
+        // Bare iam:* anywhere else (shell fragments, docs of live plans).
         const bare = /\biam:\*/gi;
         while ((m = bare.exec(text))) {
           if (seen.has(m.index)) continue;
-          hits.push(hit(this, text, m, "IAM wildcard action `iam:*` in policy statement"));
-          seen.add(m.index);
+          push(m.index, m[0].length, "IAM wildcard action `iam:*` in policy statement");
         }
         const admin = /aws\s+iam\s+attach[^\n]*AdministratorAccess|policy_arn\s*=\s*["'][^"']*AdministratorAccess["']/gi;
         while ((m = admin.exec(text))) {
           if (seen.has(m.index)) continue;
-          hits.push(hit(this, text, m, "AdministratorAccess policy attachment - full account takeover"));
-          seen.add(m.index);
+          push(m.index, m[0].length, "AdministratorAccess policy attachment - full account takeover");
         }
         return hits;
       }
@@ -625,7 +1021,8 @@
       severity: 10,
       label: 'Action "*"',
       test(text) {
-        const re = /\baction["']?\s*[:=]\s*["']\*["']/gi;
+        // Scalar, array and YAML block-list forms of Action/Actions = "*".
+        const re = /\bactions?["'`]?\s*[:=]\s*[\[{]?\s*-?\s*["'`]\*["'`]/gi;
         return matchRule(text, re, this, 'Action "*" grants every API operation');
       }
     },
@@ -635,8 +1032,51 @@
       severity: 8,
       label: 'IAM Resource "*"',
       test(text) {
-        const re = /\bresource\s*=\s*["']\*["']|"Resource"\s*:\s*["']\*["']/gi;
-        return matchRule(text, re, this, 'IAM Resource "*" - policy applies to every resource in the account');
+        const hits = [];
+        const seen = new Set();
+        const push = (idx, len, msg) => {
+          if (seen.has(idx)) return;
+          seen.add(idx);
+          hits.push(hit(this, text, { 0: text.substr(idx, len), index: idx }, msg));
+        };
+        const exact = /\bresources?["'`]?\s*[:=]\s*[\[{]?\s*-?\s*["'`]\*["'`]/gi;
+        let m;
+        while ((m = exact.exec(text))) {
+          push(m.index, m[0].length, 'IAM Resource "*" - policy applies to every resource in the account');
+        }
+        // NotResource "*" inverts the statement; it is usually inert but
+        // always worth a human look before it ships.
+        const notExact = /\bnot_?resources?["'`]?\s*[:=]\s*[\[{]?\s*-?\s*["'`]\*["'`]/gi;
+        while ((m = notExact.exec(text))) {
+          push(m.index, m[0].length, 'NotResource "*" inverts the resource scope - verify the statement is not inert or over-broad');
+        }
+        // A "*" buried inside a resource value expression (for-expressions,
+        // dynamic blocks, replace chains) is the same wildcard deferred.
+        const resKey = /\b(?:not_?resources?|resources?)["'`]?\s*[:=]/gi;
+        while ((m = resKey.exec(text))) {
+          const start = m.index + m[0].length;
+          const span = text.slice(start, start + 240);
+          const starRe = /["'`]\*["'`]/g;
+          let sm;
+          while ((sm = starRe.exec(span))) {
+            if (sm.index <= 4) continue; // direct value: exact rules own it
+            push(start + sm.index, sm[0].length,
+              'Resource "*" assembled inside a policy expression - wildcard scope deferred to evaluation');
+          }
+        }
+        // ARN wildcards: a * account or a bare * resource segment scopes the
+        // policy account-wide. bucket/* object prefixes stay allowed.
+        const arnRe = /["'`]arn:aws:[a-z0-9-]*:[^"'`\n]*["'`]/gi;
+        while ((m = arnRe.exec(text))) {
+          const arn = m[0].slice(1, -1);
+          const segs = arn.split(":");
+          const account = segs[4];
+          const resource = segs.slice(5).join(":");
+          if (account === "*" || resource === "*") {
+            push(m.index, m[0].length, `IAM resource ARN wildcard \`${arn.slice(0, 60)}\` - policy applies account-wide`);
+          }
+        }
+        return hits;
       }
     },
     {
@@ -649,6 +1089,43 @@
         const re2 = /\bAction[^\n]*sts:\*/gi;
         let hits = matchRule(text, re, this, "sts:AssumeRole with wildcard - privilege escalation vector");
         hits = hits.concat(matchRule(text, re2, { ...this, severity: 8 }, "sts:* wildcard - overly broad STS permission"));
+        return hits;
+      }
+    },
+    {
+      id: "R02-k8s-rbac-wildcard",
+      policy: "POL-02",
+      severity: 9,
+      label: "Kubernetes RBAC wildcard",
+      test(text) {
+        const hits = [];
+        const rbacCtx = /\b(?:ClusterRole|RoleBinding|roleRef|subjects|rbac|apiGroups|kind\s*:\s*\w*Role)\b/i;
+        // verbs/resources/apiGroups set to "*" inside an RBAC object.
+        const wildRe = /\b(?:apiGroups|verbs|resources)\b["'`]?\s*[:=]\s*[\[{]?\s*-?\s*["'`]?\*/gi;
+        let m;
+        while ((m = wildRe.exec(text))) {
+          const ctx = text.slice(Math.max(0, m.index - 300), m.index + 300);
+          if (!rbacCtx.test(ctx)) continue;
+          hits.push(hit(this, text, m, "RBAC rule grants wildcard apiGroups/verbs/resources - violates least privilege"));
+        }
+        // Binding to the cluster-admin role anywhere in an RBAC manifest.
+        const adminRe = /\bcluster-admin\b/gi;
+        while ((m = adminRe.exec(text))) {
+          const ctx = text.slice(Math.max(0, m.index - 300), m.index + 300);
+          if (!/\b(?:ClusterRoleBinding|RoleBinding|roleRef|kind\s*:\s*\w*Role|subjects)\b/i.test(ctx)) continue;
+          hits.push(hit(this, text, m, "Binding to cluster-admin grants unrestricted cluster access"));
+        }
+        // Privilege-escalation verbs (impersonate/bind/escalate) aimed at
+        // identity resources hand out rights without any wildcard token.
+        const privRe = /\bverbs\b["'`]?\s*[:=][\s\S]{0,300}?\b(?:impersonate|bind|escalate)\b[\s\S]{0,300}?\b(?:users?|groups?|clusterroles?|serviceaccounts?|roles?)\b/gi;
+        const privCtx = /\b(?:ClusterRole|RoleBinding|roleRef|subjects|rbac|apiGroups|kind\s*:\s*\w*Role|clusterroles?|serviceaccounts?)\b/i;
+        while ((m = privRe.exec(text))) {
+          const ctx = text.slice(Math.max(0, m.index - 300), m.index + m[0].length + 300);
+          // impersonate is RBAC vocabulary on its own; bind/escalate need
+          // a Kubernetes marker nearby so generic config verbs stay clean.
+          if (!privCtx.test(ctx) && !/\bimpersonate\b/i.test(m[0])) continue;
+          hits.push(hit(this, text, m, "RBAC verbs impersonate/bind/escalate on identity resources - privilege escalation without wildcards"));
+        }
         return hits;
       }
     },
@@ -689,6 +1166,12 @@
           const n = numeric(m[1]);
           if (n > 10) hits.push(hit(this, text, m, `Terraform count = ${n} - potential cost explosion`));
         }
+        // count = length(range(0, N)) and friends hide the number behind a
+        // function; the evaluated value still multiplies the bill.
+        const computed = /\bcount\s*=\s*(?:length|range|ceil|floor|max|min|abs|tonumber|try|can|coalesce)\s*\([^\n)]*\)/gi;
+        while ((m = computed.exec(text))) {
+          hits.push(hit(this, text, m, `count computed by function \`${m[0].trim().slice(0, 50)}\` - pin the evaluated value before apply`));
+        }
         return hits;
       }
     },
@@ -698,12 +1181,18 @@
       severity: 7,
       label: "Unbounded autoscale",
       test(text) {
-        const re = /\bmaxReplicas\s*:\s*(\d+(?:\.\d+)?(?:[eE][+-]?\d+)?)|max_replicas\s*=\s*(\d+(?:\.\d+)?(?:[eE][+-]?\d+)?)|autoscal\w+[^\n]*max[^\n]*(\d+(?:\.\d+)?(?:[eE][+-]?\d+)?)/gi;
+        // maxReplicas/max_replicas, K8s/VPA max_size/maxSize, AWS-style
+        // --max-size, ASG MaxSize and cluster-autoscaler max-nodes all cap
+        // the same runaway spend.
+        const num = String.raw`(\d+(?:\.\d+)?(?:[eE][+-]?\d+)?)`;
+        const re = new RegExp(
+          String.raw`(?:\b(?:max_?replicas|max[_-]?size|max[_-]?capacity|max[_-]?nodes|maxNodeCount|MaxSize)\b|--max-size)["']?\s*[:=]?\s*["']?` + num
+          + String.raw`|autoscal\w+[^\n]*max[^\n]*?` + num, "gi");
         const hits = [];
         let m;
         while ((m = re.exec(text))) {
-          const n = numeric(m[1] || m[2] || m[3]);
-          if (n > 20) hits.push(hit(this, text, m, `Autoscale maxReplicas=${n} - unbounded scaling risk`));
+          const n = numeric(m[1] || m[2]);
+          if (n > 20) hits.push(hit(this, text, m, `Autoscale ceiling ${n} - unbounded scaling risk`));
         }
         return hits;
       }
@@ -721,13 +1210,19 @@
         const curlRe = /\bcurl\b[^\n]*/gi;
         while ((m = curlRe.exec(text))) {
           const line = m[0];
-          const hasSecretRef = /\$(?:\{)?[A-Z_]*(?:SECRET|TOKEN|KEY|PASSWORD|ENV|CREDENTIAL|AWS_|GITHUB_)/.test(line)
+          const varRefs = [...line.matchAll(/\$(?:\{)?([A-Za-z_][A-Za-z0-9_]*)/g)].map(x => x[1]);
+          const hasSecretRef = varRefs.some(n => /(?:^|_)(?:SECRET|TOKEN|KEY|PASSWORD|PASSWD|CREDENTIAL|AWS|GITHUB)/i.test(n))
             || /\benv\b/i.test(line) || /\$\(/.test(line);
           const hasExternal = /https?:\/\//.test(line);
           const hasPipe = /\|\s*(?:bash|sh|python|node)\b/.test(line);
-          const hasAtFile = /(?:^|\s)(?:-d|--data(?:-binary)?|--form|-F)\s+@[^\s"']+/.test(line);
+          const hasAtFile = /(?:^|\s)(?:-d|--data(?:-binary|-raw|-ascii)?|--form|-F|--data-urlencode|--json|-T|--upload-file)\s+["']?@[^\s"']+/.test(line)
+            || /\s-[dFT]\S*@/.test(line)
+            || /\s--(?:data|form|json|upload-file|data-urlencode)\S*@/.test(line)
+            || /[\w"'.-]*=@[\/~.\w-]/.test(line);
+          // Client certs, netrc files and inline credentials leave the host.
+          const hasCredFlags = /\s(?:--key|--cert|--cacert|--user|-u|--proxy-user|-U|--netrc-file|--login-options|--mail-[\w-]+|--oauth2-bearer)\b/.test(line);
           const fedFromPipe = /(?:^|\n)[^\n]*\|\s*curl\b/.test(text.slice(0, m.index) + line);
-          if ((hasExternal && (hasSecretRef || hasAtFile)) || hasPipe || fedFromPipe) {
+          if ((hasExternal && (hasSecretRef || hasAtFile || hasCredFlags)) || hasPipe || fedFromPipe) {
             hits.push(hit(this, text, m,
               `Potential secret exfiltration via curl: \`${line.trim().slice(0, 90)}\``));
           } else if (hasExternal && /exfil|attacker|ngrok|oast|burpcollaborator|webhook/i.test(text)) {
@@ -747,7 +1242,7 @@
       severity: 9,
       label: "Environment dump",
       test(text) {
-        const re = /\bprintenv\b[^\n]*|\b(?:env|printenv)\b[^\n]*\|\s*(?:base64|curl|nc)\b|\bexport\b[^\n]*\|\s*curl\b|\bcat\s+\/proc\/self\/environ\b/gi;
+        const re = /\bprintenv\b[^\n]*|\b(?:env|printenv)\b[^\n]*\|\s*(?:base64|curl|nc|ncat|wget|xxd|openssl)\b|\bexport\b[^\n]*\|\s*(?:curl|wget|nc|ncat|base64|xxd)\b|\bset\b[^\n]*\|\s*(?:curl|wget|nc|ncat|base64)\b|\bcat\s+\/proc\/(?:self|\d+)\/environ\b|\bcompgen\s+-e\b[^\n]*\|\s*(?:curl|nc|base64)|(?:^|[\n;&|])\s*(?:env|export|set|printenv)\b[ \t]*(?:#[^\n]*)?(?=\n|$)/gi;
         return matchRule(text, re, this, "Environment variable dump - would expose secrets");
       }
     },
@@ -757,8 +1252,13 @@
       severity: 9,
       label: "Secret in URL",
       test(text) {
-        const re = /https?:\/\/[^\s"'`]*[?&](?:token|key|secret|password|api_key)=[^\s"'`&]+/gi;
-        return matchRule(text, re, this, "Secret material embedded in URL query string");
+        const hits = [];
+        const re = /https?:\/\/[^\s"'`]*[?&](?:token|key|secret|password|passwd|api_key|api-key|access_token|auth|sig|signature|credential|private_key|privatekey)=[^\s"'`&]+/gi;
+        hits.push(...matchRule(text, re, this, "Secret material embedded in URL query string"));
+        // user:pass@host userinfo carries credentials in the clear.
+        const ui = /https?:\/\/[^\s/"'`]*:[^\s/"'@]*@/gi;
+        hits.push(...matchRule(text, ui, this, "Credentials embedded in URL userinfo - sent to the remote host in cleartext"));
+        return hits;
       }
     },
     {
@@ -767,7 +1267,7 @@
       severity: 10,
       label: "Covert egress channel",
       test(text) {
-        const re = /\b(?:nc|ncat|netcat|socat)\b[^\n]*<\s*[^\s]*|\/dev\/tcp\/|\b(?:bash|sh|zsh)\b[^\n]*-i\b[^\n]*>\s*&\s*\/dev\/tcp/gi;
+        const re = /\b(?:nc|ncat|netcat|socat)\b[^\n]*<\s*[^\s]*|\/dev\/tcp\/|\b(?:bash|sh|zsh)\b[^\n]*-i\b[^\n]*>\s*&\s*\/dev\/tcp|\|\s*(?:nc|ncat|netcat|socat)\b[^\n]*|\b(?:nc|ncat|netcat)\b[^\n]*\|\s*(?:sudo\s+)?(?:bash|sh|zsh|dash|ksh|python[\d.]*|perl|ruby|node|php)\b|\b(?:rsync|sftp|lftp)\b[^\n]*(?:~\/\.ssh|\/etc\/|\.aws\/|\.env\b|credential|secret|\.pem\b|\.key\b|id_rsa)|\bsftp\b[^\n]*\s-b\b|\brsync\b[^\n]*--files-from\b/gi;
         return matchRule(text, re, this, "Covert network egress or reverse shell - blocks all outbound channels");
       }
     },
@@ -829,7 +1329,7 @@
       label: rule.label,
       message: message || match[0].trim().slice(0, 120),
       snippet: match[0].trim().slice(0, 140),
-      line: lineNo(text, match.index),
+      line: scannedLine(match.index, text),
       remediation: remediationFor(rule.id),
       _start: match.index,
       _len: match[0].length,
@@ -849,6 +1349,7 @@
     const map = {
       "R01-rm-rf": "Replace with scoped delete targeting an explicit path allowlist; require --dry-run preview.",
       "R01-rm-rf-any": "Scope deletion to an allowlisted directory; add pre-flight `ls` dry-run.",
+      "R01-indirect-command": "Resolve the command name and target to literal values in the plan; never let a variable or substitution pick the binary.",
       "R01-drop-table": "Use expand-contract: create new table, dual-write, backfill, cutover, then drop in a later release.",
       "R01-drop-column": "Add new column nullable, backfill, switch reads, then drop old column in next release.",
       "R01-drop-database": "Never auto-drop databases; require manual approval and a snapshot restore point.",
@@ -892,6 +1393,13 @@
       "R01-process-kill": "Stop services with their supervisor's graceful shutdown; SIGKILL is a human-only action.",
       "R01-container-wipe": "Remove named containers or volumes individually after confirming they are unused.",
       "R01-nosql-drop": "Export a snapshot first; drop collections through a reviewed migration, never a shell eval.",
+      "R01-merge-delete": "Scope the MERGE predicate to a key and preview matched rows before delete actions run.",
+      "R01-git-destructive": "Recreate the state on a new branch and review the diff; never discard work or delete refs directly.",
+      "R01-remote-exec": "Download the payload, decode and review it as plain text, then run the reviewed artifact.",
+      "R01-host-power": "Schedule power actions through the platform's approved maintenance path with a human sign-off.",
+      "R01-docker-bulk": "Stop or remove containers by explicit name after confirming each is unused; never drive mass ops from docker ps.",
+      "R01-sql-file-io": "Ban INTO OUTFILE and LOAD_FILE; move file exchange through an audited, allowlisted job.",
+      "R02-k8s-rbac-wildcard": "Enumerate the exact apiGroups, resources and verbs the workload needs; never bind cluster-admin.",
     };
     return map[ruleId] || "Review and apply least-privilege / safe-default remediation.";
   }
@@ -919,6 +1427,7 @@
       "R01-flushall": ["redis"],
       "R01-rm-rf": ["compute", "storage"],
       "R01-rm-rf-any": ["compute", "storage"],
+      "R01-indirect-command": ["compute", "storage"],
       "R01-drop-table": ["postgres"],
       "R01-drop-column": ["postgres"],
       "R01-drop-database": ["postgres"],
@@ -945,6 +1454,13 @@
       "R01-process-kill": ["compute"],
       "R01-container-wipe": ["compute"],
       "R01-nosql-drop": ["postgres", "redis"],
+      "R01-merge-delete": ["postgres"],
+      "R01-git-destructive": ["compute", "storage"],
+      "R01-remote-exec": ["compute", "storage"],
+      "R01-host-power": ["compute"],
+      "R01-docker-bulk": ["compute"],
+      "R01-sql-file-io": ["postgres", "storage"],
+      "R02-k8s-rbac-wildcard": ["iam", "compute"],
       "R02-iam-wildcard-action": ["iam", "secrets"],
       "R02-admin-access": ["iam", "secrets", "compute"],
       "R02-action-all": ["iam", "secrets"],
@@ -990,10 +1506,12 @@
       return { score: 0, violations: [], findings: [], affected: [], clean: true, policyStates: emptyPolicyStates() };
     }
     const norm = normalize(input);
+    const scan = spliceContinuations(norm);
+    scanLines = scan.lines;
     const findings = [];
     for (const rule of RULES) {
       try {
-        const hits = rule.test(norm);
+        const hits = rule.test(scan.text);
         if (hits && hits.length) findings.push(...hits);
       } catch (_) {
         findings.push({
@@ -1004,9 +1522,10 @@
       }
     }
     // Recover the original snippet when normalization preserved offsets.
-    // Unicode escape decoding can shift columns, so keep the normalized
-    // snippet in that case; it still shows the decoded dangerous command.
-    const offsetsStable = input.length === norm.length;
+    // Unicode escape decoding can shift columns and continuation splices
+    // remove characters, so keep the normalized snippet in those cases; it
+    // still shows the decoded dangerous command.
+    const offsetsStable = input.length === norm.length && scan.text.length === norm.length;
     for (const f of findings) {
       if (typeof f._start === "number") {
         if (offsetsStable) {
@@ -1016,8 +1535,10 @@
         delete f._len;
       }
     }
-    // Quoted documentation and shell echoes are not proposed actions.
-    const kept = findings.filter(f => f.rule === "ENGINE-ERROR" || !isDocLine(input, f.line));
+    // Quoted documentation and shell echoes are not proposed actions. The
+    // check runs on the normalized text because \uXXXX escapes can add or
+    // remove lines; the finding's line number is already in that space.
+    const kept = findings.filter(f => f.rule === "ENGINE-ERROR" || !isDocLine(norm, f.line));
     const seen = new Set();
     const deduped = kept.filter(f => {
       const k = f.rule + ":" + f.line + ":" + f.snippet.slice(0, 40);

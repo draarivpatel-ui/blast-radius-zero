@@ -10,4 +10,4 @@ Switch to the destructive migration. Seven findings, score 100. Flip the map to 
 
 Text scanning explains a plan, but the typed action gate makes the real decision, one structured action at a time. A test run is allowed. Network egress is denied. A path that escapes the workspace is denied.
 
-Every number comes from the real rules and a fixed seed, so a replay is identical. The page exports JSON, Markdown and SARIF audits, plus a local SHA-256 receipt. Nothing is executed, and nothing leaves the browser. 93 Node tests and 72 Python tests pass.
+Every number comes from the real rules and a fixed seed, so a replay is identical. The page exports JSON, Markdown and SARIF audits, plus a local SHA-256 receipt. Nothing is executed, and nothing leaves the browser. 104 Node tests and 72 Python tests pass.

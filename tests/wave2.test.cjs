@@ -185,7 +185,7 @@ test("W2 06: a visible audit preview refreshes with every re-analysis", () => {
 /* ------------------------------ SARIF strictness -------------------------- */
 
 test("W2 07: SARIF results carry ruleIndex and exports disclose disabled policies", () => {
-  assert.match(appJs, /ruleIndex: ruleIndexById/);
+  assert.match(appJs, /ruleIndex: extraRule\(f\.rule\)/);
   assert.match(appJs, /disabledPolicies: analysis && analysis\.disabledPolicies/);
   assert.match(appJs, /helpUri: "https:\/\/aariv\.me\/blast-radius-zero\/"/);
   const anchor = appJs.indexOf("function buildSarif");
