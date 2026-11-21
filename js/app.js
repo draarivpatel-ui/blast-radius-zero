@@ -117,6 +117,9 @@
     currentId = id;
     currentScenario = getScenario(id);
     graphView = "proposed";
+    // What-if toggles describe the previous incident; a new incident starts
+    // with every policy enforced so the verdict is never silently filtered.
+    disabledPolicies.clear();
     syncScenarioActive();
     renderAll();
     if (id === "custom") {
@@ -137,6 +140,17 @@
     analyzeAndRender();
     renderRightDiff();
     startDryRunAnimation();
+    syncAuditPreview();
+  }
+
+  // A visible audit preview must never show stale numbers after the plan,
+  // the scenario or the policy toggles change.
+  function syncAuditPreview() {
+    const previewEl = $("#auditPreview");
+    if (!previewEl || previewEl.hidden) return;
+    previewEl.textContent = auditPreviewMode === "sarif"
+      ? JSON.stringify(buildSarif(), null, 2)
+      : buildMarkdown();
   }
 
   // ---- Incident context --------------------------------------------------
@@ -237,12 +251,13 @@
     const afterScore = after ? after.score : 0;
     set("#impactBefore", String(beforeScore));
     set("#impactAfter", String(afterScore));
-    set("#impactBeforeMeta", before ? `${before.findings.length} findings, ${before.affected.length} resources` : "-");
-    set("#impactAfterMeta", after ? `${after.findings.length} findings, ${after.affected.length} resources` : "-");
     const dropped = Math.max(0, beforeScore - afterScore);
     const resources = Math.max(0, (before ? before.affected.length : 0) - (after ? after.affected.length : 0));
+    const plural = (n, word) => `${n} ${word}${n === 1 ? "" : "s"}`;
+    set("#impactBeforeMeta", before ? `${plural(before.findings.length, "finding")}, ${plural(before.affected.length, "resource")}` : "-");
+    set("#impactAfterMeta", after ? `${plural(after.findings.length, "finding")}, ${plural(after.affected.length, "resource")}` : "-");
     set("#impactDelta", hasSafePlan()
-      ? `Containment drops the score by ${dropped} and removes ${resources} resources from the blast radius`
+      ? `Containment drops the score by ${dropped} and removes ${plural(resources, "resource")} from the blast radius`
       : "No prewritten safe plan for a custom incident");
     const barBefore = $("#impactBarBefore");
     const barAfter = $("#impactBarAfter");
@@ -884,6 +899,7 @@
         remediation: f.remediation,
       })) : [],
       policyStates: analysis ? analysis.policyStates : [],
+      disabledPolicies: analysis && analysis.disabledPolicies ? analysis.disabledPolicies : [],
       containment: analysis && hasSafePlan() ? window.BlastTelemetry.containment(analysis, safeAnalysis) : null,
       diagnostics: window.BlastTelemetry && analysis ? {
         breakdown: window.BlastTelemetry.scoreBreakdown(analysis),
@@ -912,12 +928,14 @@
       shortDescription: { text: r.label },
       fullDescription: { text: `${r.policy} - ${r.label}` },
       help: { text: (window.BlastPolicy.remediationFor || (() => ""))(r.id) || r.label },
-      helpUri: "https://json.schemastore.org/sarif-2.1.0.json",
+      helpUri: "https://aariv.me/blast-radius-zero/",
       defaultConfiguration: { level: levelFor(r.severity) },
       properties: { policy: r.policy, severity: r.severity, tags: ["security", "blast-radius", r.policy] },
     }));
+    const ruleIndexById = new Map(rules.map((r, i) => [r.id, i]));
     const results = analysis ? analysis.findings.map(f => ({
       ruleId: f.rule,
+      ruleIndex: ruleIndexById.has(f.rule) ? ruleIndexById.get(f.rule) : 0,
       level: levelFor(f.severity),
       message: { text: f.message },
       locations: [{ physicalLocation: {
@@ -942,6 +960,7 @@
           blastScore: analysis ? analysis.score : 0,
           gateStatus: window.BlastTelemetry.verdict(analysis).status,
           scenario: currentScenario ? currentScenario.id : null,
+          disabledPolicies: analysis && analysis.disabledPolicies ? analysis.disabledPolicies : [],
         }
       }]
     };

@@ -192,9 +192,10 @@ code, pre, kbd, samp { font-family: var(--mono); }
   gap: 16px;
   align-items: center;
   margin-top: 18px;
-  padding: 14px 16px;
+  padding: 14px 16px 14px 20px;
   border-radius: var(--r);
   border: 1px solid var(--vline);
+  border-left: 3px solid var(--v);
   background: linear-gradient(90deg, var(--vbg), transparent 60%);
 }
 .impact-side { display: grid; gap: 2px; min-width: 0; }
